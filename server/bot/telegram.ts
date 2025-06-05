@@ -28,6 +28,7 @@ export class TelegramBotService {
   private bot: TelegramBot | null = null;
   private isActive: boolean = true;
   private userSessions: Map<string, any> = new Map();
+  private webSessionMapping: Map<number, string> = new Map(); // Maps numeric IDs to session UUIDs
   private token: string;
 
   constructor(config: TelegramBotConfig) {
@@ -41,16 +42,12 @@ export class TelegramBotService {
 
     if (!token || token === "demo_token" || token === "") {
       console.error("❌ No valid Telegram bot token found!");
-      console.error("Expected format: 1234567890:ABC...");
-      console.error("Current token:", token ? token.substring(0, 10) + "..." : "undefined");
-      console.error("Make sure TELEGRAM_BOT_TOKEN is set in your .env file");
       throw new Error("Telegram bot token is required");
     }
 
     console.log("🤖 Initializing Telegram bot with token:", token.substring(0, 10) + "...");
 
     try {
-      // Enable polling to receive messages with better error handling
       this.bot = new TelegramBot(token, {
         polling: {
           interval: 300,
@@ -68,7 +65,6 @@ export class TelegramBotService {
 
   async start(useWebhook = true) {
     try {
-      // Initialize the bot when starting
       this.initializeBot();
 
       if (!this.bot) {
@@ -76,74 +72,29 @@ export class TelegramBotService {
       }
 
       this.isActive = true;
-
-      // Test the bot first
       const me = await this.bot.getMe();
       console.log('✅ Bot verified:', me.username, `(@${me.username})`);
 
       if (!useWebhook) {
-        // Force stop any existing polling first
         try {
           if (this.bot.isPolling) {
             await this.bot.stopPolling();
             console.log('🛑 Stopped existing polling');
-            // Wait a moment for cleanup
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
         } catch (err) {
           console.log('No existing polling to stop');
         }
 
-        // Start fresh polling
         await this.bot.startPolling();
         console.log('✅ Telegram bot started with polling');
 
-        // ONLY ONE MESSAGE LISTENER - NO DUPLICATES
         this.bot.on('message', async (msg) => {
-          // Skip non-text messages
           if (!msg.text) return;
-
           console.log('🔵 Telegram message received from:', msg.chat.id, ':', msg.text);
-
-          // Check if this is a new user starting an inquiry
-          if (msg.text === '/start' || !this.userSessions.get(msg.chat.id.toString())) {
-            try {
-              await storage.createNotification({
-                message: `🔍 New inquiry started by user ${msg.chat.id}`,
-                type: 'new_inquiry_started'
-              });
-              console.log('✅ New inquiry notification created');
-            } catch (err) {
-              console.error('❌ Failed to create new inquiry notification:', err);
-            }
-          }
-
-          // Only create notifications for important business events
-          try {
-            // Vendor responding with quote/rate
-            if (msg.text.includes('$') || msg.text.includes('rate') || msg.text.includes('quote') || msg.text.includes('price')) {
-              await storage.createNotification({
-                message: `💰 Vendor responded with quote: "${msg.text}"`,
-                type: 'vendor_response'
-              });
-            }
-            // New inquiry from potential customer
-            else if (msg.text.includes('need') || msg.text.includes('looking for') || msg.text.includes('inquiry') || msg.text.includes('quote me')) {
-              await storage.createNotification({
-                message: `🔍 New inquiry received: "${msg.text}"`,
-                type: 'new_inquiry'
-              });
-            }
-            // No notification for random chit-chat!
-
-          } catch (err) {
-            console.error('Failed to create notification:', err);
-          }
-
-          this.handleIncomingMessage(msg);
+          await this.handleIncomingMessage(msg);
         });
 
-        // Error handling
         this.bot.on('error', (error) => {
           console.error('Telegram bot error:', error);
         });
@@ -173,6 +124,7 @@ export class TelegramBotService {
       }
     }
   }
+
   async setupWebhook(webhookUrl: string) {
     try {
       this.initializeBot();
@@ -181,17 +133,14 @@ export class TelegramBotService {
         throw new Error("Bot not initialized");
       }
 
-      // Stop polling if it's running
       if (this.bot.isPolling) {
         await this.bot.stopPolling();
         console.log('🛑 Stopped polling');
       }
 
-      // Set the webhook
       await this.bot.setWebHook(webhookUrl);
       console.log('✅ Webhook set to:', webhookUrl);
 
-      // Verify webhook
       const info = await this.bot.getWebHookInfo();
       console.log('🔗 Webhook info:', info);
 
@@ -205,223 +154,37 @@ export class TelegramBotService {
   async processWebhookUpdate(update: any) {
     try {
       if (update.message && update.message.text) {
-        const chatId = update.message.chat.id;
-        const text = update.message.text;
-
-        console.log('🔵 Webhook message received from:', chatId, ':', text);
-
-        // ✅ NEW: Handle messages from your web chat (6924933952)
-        if (chatId == 6924933952) {
-
-          // Check if this is a reply to a web user session
-          const sessionMatch = text.match(/🔗 Session: ([a-f0-9-]+)/);
-
-          if (sessionMatch) {
-            const sessionId = sessionMatch[1];
-
-            // Extract the actual reply (remove session prefix)
-            const botReply = text.replace(/🔗 Session: [a-f0-9-]+\n📝 /, '');
-
-            // Route reply back to the web user
-            if (global.io) {
-              global.io.to(`session-${sessionId}`).emit("bot-reply", {
-                sessionId,
-                message: botReply
-              });
-
-              console.log(`✅ Reply routed to web session ${sessionId}: ${botReply}`);
-            }
-
-            // Don't send auto-reply back to yourself
-            return res.status(200).json({ ok: true });
-          }
-        }
-
-        // Continue with your existing business logic for other users...
-        if (chatId != 6924933952) {
-          // Your existing notification logic
-          if (text === '/start' || !this.userSessions.get(chatId.toString())) {
-            try {
-              await storage.createNotification({
-                message: `🔍 New inquiry started by user ${chatId}`,
-                type: 'new_inquiry_started'
-              });
-            } catch (err) {
-              console.error('❌ Failed to create notification:', err);
-            }
-          }
-
-          await this.handleIncomingMessage(update.message);
-        }
+        console.log('🔵 Webhook message received from:', update.message.chat.id, ':', update.message.text);
+        await this.handleIncomingMessage(update.message);
       }
     } catch (error) {
       console.error('❌ Error processing webhook update:', error);
     }
   }
 
-
-  async testBot() {
-    try {
-      this.initializeBot();
-      if (!this.bot) {
-        throw new Error("Bot not initialized");
-      }
-      const me = await this.bot.getMe();
-      console.log('🤖 Bot info:', me);
-      return me;
-    } catch (error) {
-      console.error('❌ Bot token error:', error);
-      return null;
-    }
+  // Web session mapping methods
+  setWebSessionMapping(numericId: number, sessionId: string) {
+    this.webSessionMapping.set(numericId, sessionId);
+    console.log(`🔗 Mapped numeric ID ${numericId} to session ${sessionId}`);
   }
 
-  async handleVendorRateResponse(msg: any) {
-    const chatId = msg.chat.id;
-    const text = msg.text;
-
-    // Check if this is a rate response (contains RATE keyword and inquiry ID)
-    const ratePattern = /RATE:\s*([0-9]+(?:\.[0-9]+)?)\s*per\s*(\w+)/i;
-    const gstPattern = /GST:\s*([0-9]+(?:\.[0-9]+)?)%/i;
-    const deliveryPattern = /DELIVERY:\s*([0-9]+(?:\.[0-9]+)?)/i;
-    const inquiryPattern = /Inquiry ID:\s*(INQ-[0-9]+)/i;
-
-    const rateMatch = text.match(ratePattern);
-    const gstMatch = text.match(gstPattern);
-    const deliveryMatch = text.match(deliveryPattern);
-    const inquiryMatch = text.match(inquiryPattern);
-
-    if (rateMatch && inquiryMatch) {
-      const rate = parseFloat(rateMatch[1]);
-      const unit = rateMatch[2];
-      const gst = gstMatch ? parseFloat(gstMatch[1]) : 0;
-      const delivery = deliveryMatch ? parseFloat(deliveryMatch[1]) : 0;
-      const inquiryId = inquiryMatch[1];
-
-      console.log(`📋 Rate response received from ${chatId}:`, {
-        rate, unit, gst, delivery, inquiryId
-      });
-
-      // Process the rate submission
-      await this.processVendorRateSubmission(chatId, {
-        inquiryId,
-        rate,
-        unit,
-        gst,
-        delivery
-      });
-
-      // Confirm receipt to vendor
-      await this.sendMessage(chatId, `✅ Thank you! Your quote has been received and sent to the buyer.
-      
-📋 Your Quote:
-💰 Rate: ₹${rate} per ${unit}
-📊 GST: ${gst}%
-🚚 Delivery: ₹${delivery}
-      
-Inquiry ID: ${inquiryId}`);
-      try {
-        await storage.createNotification({
-          message: `✅ Vendor quote received: ${rate} per ${unit} (Inquiry #${inquiryId})`,
-          type: 'vendor_quote_confirmed'
-        });
-      } catch (err) {
-        console.error('Failed to create notification:', err);
-      }
-      return true;
-    }
-
-    return false;
+  getWebSessionId(numericId: number): string | undefined {
+    return this.webSessionMapping.get(numericId);
   }
 
-  private async processVendorRateSubmission(chatId: number, rateData: any) {
-    try {
-      // Find the vendor by telegram ID
-      const vendor = await storage.getVendorByTelegramId(chatId.toString());
-      if (!vendor) {
-        console.log(`❌ Vendor not found for chat ID: ${chatId}`);
-        return;
-      }
-
-      // Find the inquiry
-      const inquiry = await storage.getInquiryById(rateData.inquiryId);
-      if (!inquiry) {
-        console.log(`❌ Inquiry not found: ${rateData.inquiryId}`);
-        return;
-      }
-
-      // Save the rate response
-      await storage.createPriceResponse({
-        vendorId: vendor.vendorId,
-        inquiryId: rateData.inquiryId,
-        material: inquiry.material,
-        price: rateData.rate.toString(),
-        gst: rateData.gst.toString(),
-        deliveryCharge: rateData.delivery.toString()
-      });
-
-      console.log(`✅ Rate saved for vendor ${vendor.name}`);
-
-      // Update inquiry response count
-      await storage.incrementInquiryResponses(rateData.inquiryId);
-
-      // Send compiled quote to buyer
-      await this.sendCompiledQuoteToBuyer(inquiry, rateData, vendor);
-
-    } catch (error) {
-      console.error('Error processing vendor rate:', error);
-    }
+  isWebSession(chatId: number): boolean {
+    return this.webSessionMapping.has(chatId);
   }
 
-  private async sendCompiledQuoteToBuyer(inquiry: any, rateData: any, vendor: any) {
-    const buyerMessage = `🏗️ **New Quote Received!**
-
-For your inquiry: ${inquiry.material.toUpperCase()}
-📍 City: ${inquiry.city}
-📦 Quantity: ${inquiry.quantity}
-
-💼 **Vendor: ${vendor.name}**
-💰 Rate: ₹${rateData.rate} per ${rateData.unit}
-📊 GST: ${rateData.gst}%
-🚚 Delivery: ₹${rateData.delivery}
-📞 Contact: ${vendor.phone}
-
-Inquiry ID: ${inquiry.inquiryId}
-
-More quotes may follow from other vendors!`;
-
-    try {
-      // Send to buyer via their platform (telegram in this case)
-      if (inquiry.platform === 'telegram') {
-        await this.sendMessage(parseInt(inquiry.userPhone), buyerMessage);
-      }
-      // Add WhatsApp buyer notification here later
-
-      console.log(`✅ Quote sent to buyer for inquiry ${inquiry.inquiryId}`);
-      try {
-        await storage.createNotification({
-          message: `📤 Quote forwarded to buyer for inquiry #${inquiry.inquiryId}`,
-          type: 'quote_sent_to_buyer'
-        });
-      } catch (err) {
-        console.error('Failed to create notification:', err);
-      }
-    } catch (error) {
-      console.error('Error sending quote to buyer:', error);
-    }
-  }
   async handleIncomingMessage(msg: any) {
-    if (!this.isActive || !this.bot) return;
+    if (!this.isActive) return;
 
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    // 🆕 NEW: Check if this is an API message first
-    if (text?.startsWith('[API]')) {
-      await this.handleApiMessage(chatId, text);
-      return;
-    }
+    console.log(`🔄 Processing message from ${chatId}: "${text}"`);
 
-    // Handle /start command first - ALWAYS reset session
+    // Handle /start command
     if (text === '/start') {
       this.userSessions.delete(chatId.toString());
       const userSession = { step: 'user_type' };
@@ -443,56 +206,29 @@ Reply with 1 or 2`;
 
     // Handle /help command
     if (text === '/help') {
-      await this.sendMessage(chatId, `🤖 PriceBot Help:
+      await this.sendMessage(chatId, `🤖 CemTemBot Help:
 
 Commands:
 /start - Start a new pricing inquiry
 /help - Show this help message
 
-For Vendors: To submit a quote, use this format:
-**RATE: [Price] per [Unit]**
-**GST: [Percentage]%**
-**DELIVERY: [Charges]**
-
-Example:
-RATE: 350 per bag
-GST: 18%
-DELIVERY: 50
-Inquiry ID: INQ-123456789
-
 Simply send /start to begin!`);
       return;
     }
 
-    // First check if this is a vendor rate response
+    // Check if this is a vendor rate response
     const isRateResponse = await this.handleVendorRateResponse(msg);
     if (isRateResponse) {
-      return; // Don't process as regular conversation
+      return;
     }
 
-    // Continue with existing conversation flow
+    // Continue with conversation flow
     const userSession = this.userSessions.get(chatId.toString()) || { step: 'start' };
-
-    console.log(`🔄 Processing message from ${chatId}: "${text}" (step: ${userSession.step})`);
-
     let response = '';
 
     switch (userSession.step) {
       case 'start':
-        if (text?.toLowerCase().includes('hello') || text?.toLowerCase().includes('hi')) {
-          response = `🏗️ Welcome to CemTemBot! 
-
-I help you get instant pricing for cement and TMT bars from verified vendors in your city.
-
-Are you a:
-1️⃣ Buyer (looking for prices)
-2️⃣ Vendor (want to provide quotes)
-
-Reply with 1 or 2`;
-          userSession.step = 'user_type';
-        } else {
-          response = `👋 Hello! Send /start to get started with pricing inquiries.`;
-        }
+        response = `👋 Hello! Send /start to get started with pricing inquiries.`;
         break;
 
       case 'user_type':
@@ -564,7 +300,7 @@ Reply with 1, 2, or 3:`;
 
 What's your contact phone number?
 
-Enter your phone number (with country code if international):`;
+Enter your phone number:`;
         break;
 
       case 'vendor_phone':
@@ -590,24 +326,9 @@ Reply "confirm" to register or "restart" to start over:`;
 
 Welcome to our vendor network, ${userSession.vendorName}!
 
-📋 Vendor ID: VEN-${Date.now()}
+You'll start receiving pricing inquiries for ${userSession.materials.join(' and ').toUpperCase()} in ${userSession.vendorCity}.
 
-You'll start receiving pricing inquiries for ${userSession.materials.join(' and ').toUpperCase()} in ${userSession.vendorCity} via Telegram.
-
-When you receive an inquiry, reply with your quote in this format:
-
-**RATE: [Price] per [Unit]**
-**GST: [Percentage]%**  
-**DELIVERY: [Charges]**
-
-Example:
-RATE: 350 per bag
-GST: 18%
-DELIVERY: 50
-Inquiry ID: INQ-123456789
-
-Send /start anytime for help or to update your information.`;
-            // Clear session after successful registration
+Send /start anytime for help.`;
             this.userSessions.delete(chatId.toString());
           } catch (error) {
             console.error('Vendor registration failed:', error);
@@ -693,14 +414,9 @@ Reply "confirm" to send to vendors or "restart" to start over:`;
           await this.processInquiry(chatId, userSession);
           response = `🚀 Your inquiry has been sent!
 
-We've contacted vendors in ${userSession.city} for ${userSession.material} pricing. You should receive quotes shortly via Telegram.
+We've contacted vendors in ${userSession.city} for ${userSession.material} pricing. You should receive quotes shortly.
 
 📊 Inquiry ID: INQ-${Date.now()}
-
-Vendors will reply directly to you with quotes in this format:
-💰 Rate: ₹X per unit
-📊 GST: X%
-🚚 Delivery: ₹X
 
 Send /start for a new inquiry anytime!`;
           this.userSessions.delete(chatId.toString());
@@ -727,86 +443,84 @@ Reply with 1 or 2`;
     await this.sendMessage(chatId, response);
   }
 
-  // 🆕 NEW: Handle API messages separately
-  async handleApiMessage(chatId: number, fullText: string) {
-    try {
-      // Extract the real message (remove [API] prefix and parse metadata)
-      const parts = fullText.split('\n');
-      const apiPart = parts[0]; // [API] Session: xxx | User: xxx
-      const actualMessage = parts.slice(1).join('\n');
+  async handleVendorRateResponse(msg: any) {
+    const chatId = msg.chat.id;
+    const text = msg.text;
 
-      // Parse session and user info
-      const sessionMatch = apiPart.match(/Session: ([\w-]+)/);
-      const userMatch = apiPart.match(/User: ([\w_]+)/);
+    const ratePattern = /RATE:\s*([0-9]+(?:\.[0-9]+)?)\s*per\s*(\w+)/i;
+    const gstPattern = /GST:\s*([0-9]+(?:\.[0-9]+)?)%/i;
+    const deliveryPattern = /DELIVERY:\s*([0-9]+(?:\.[0-9]+)?)/i;
+    const inquiryPattern = /Inquiry ID:\s*(INQ-[0-9]+)/i;
 
-      const sessionId = sessionMatch ? sessionMatch[1] : 'unknown';
-      const userId = userMatch ? userMatch[1] : 'unknown';
+    const rateMatch = text.match(ratePattern);
+    const gstMatch = text.match(gstPattern);
+    const deliveryMatch = text.match(deliveryPattern);
+    const inquiryMatch = text.match(inquiryPattern);
 
-      console.log(`📱 API Message received - Session: ${sessionId}, User: ${userId}`);
+    if (rateMatch && inquiryMatch) {
+      const rate = parseFloat(rateMatch[1]);
+      const unit = rateMatch[2];
+      const gst = gstMatch ? parseFloat(gstMatch[1]) : 0;
+      const delivery = deliveryMatch ? parseFloat(deliveryMatch[1]) : 0;
+      const inquiryId = inquiryMatch[1];
 
-      // Format response for API messages
-      const response = `💬 **Customer Support Message**
+      await this.sendMessage(chatId, `✅ Thank you! Your quote has been received.
+      
+📋 Your Quote:
+💰 Rate: ₹${rate} per ${unit}
+📊 GST: ${gst}%
+🚚 Delivery: ₹${delivery}
+      
+Inquiry ID: ${inquiryId}`);
 
-**Session ID:** \`${sessionId}\`
-**User ID:** \`${userId}\`
-**Message:** ${actualMessage}
-
----
-*This message was sent via API. Reply to this chat to respond to the customer.*`;
-
-      await this.sendMessage(chatId, response);
-    } catch (error) {
-      console.error('Error handling API message:', error);
-      await this.sendMessage(chatId, '❌ Error processing API message');
+      try {
+        await storage.createNotification({
+          message: `✅ Vendor quote received: ${rate} per ${unit} (Inquiry #${inquiryId})`,
+          type: 'vendor_quote_confirmed'
+        });
+      } catch (err) {
+        console.error('Failed to create notification:', err);
+      }
+      return true;
     }
+
+    return false;
   }
+
   private async processInquiry(chatId: number, session: any) {
     const inquiryId = `INQ-${Date.now()}`;
 
-    console.log(`🔍 DEBUG: Looking for vendors in ${session.city} for ${session.material}`);
+    try {
+      const vendors = await storage.getVendors(session.city, session.material);
+      const selectedVendors = vendors.slice(0, 3);
 
-    // Find suitable vendors
-    const vendors = await storage.getVendors(session.city, session.material);
-    console.log(`🔍 DEBUG: Found ${vendors.length} vendors:`, vendors.map(v => ({
-      name: v.name,
-      city: v.city,
-      materials: v.materials,
-      telegramId: v.telegramId
-    })));
+      if (selectedVendors.length > 0) {
+        await storage.createInquiry({
+          inquiryId,
+          userName: this.isWebSession(chatId) ? "Web User" : "Telegram User",
+          userPhone: chatId.toString(),
+          city: session.city,
+          material: session.material,
+          brand: session.brand,
+          quantity: session.quantity,
+          vendorsContacted: selectedVendors.map(v => v.vendorId),
+          responseCount: 0,
+          status: "pending",
+          platform: this.isWebSession(chatId) ? "web" : "telegram"
+        });
 
-    const selectedVendors = vendors.slice(0, 3);
-    console.log(`🔍 DEBUG: Selected ${selectedVendors.length} vendors for messaging`);
-
-    if (selectedVendors.length > 0) {
-      // Create inquiry record
-      await storage.createInquiry({
-        inquiryId,
-        userName: "Telegram User",
-        userPhone: chatId.toString(),
-        city: session.city,
-        material: session.material,
-        brand: session.brand,
-        quantity: session.quantity,
-        vendorsContacted: selectedVendors.map(v => v.vendorId),
-        responseCount: 0,
-        status: "pending",
-        platform: "telegram"
-      });
-
-      // Send messages to vendors
-      await this.sendVendorMessages(selectedVendors, session, inquiryId);
-    } else {
-      console.log(`❌ No vendors found for ${session.material} in ${session.city}`);
+        // Send messages to vendors
+        await this.sendVendorMessages(selectedVendors, session, inquiryId);
+      }
+    } catch (error) {
+      console.error('Error processing inquiry:', error);
     }
   }
 
   private async processVendorRegistration(chatId: number, session: any) {
     const vendorId = `VEN-${Date.now()}`;
 
-    console.log(`🔍 DEBUG: Registering vendor with chatId: ${chatId}`);
-
     try {
-      // Register the vendor in the database
       const vendorData = {
         vendorId,
         name: session.vendorName,
@@ -819,12 +533,8 @@ Reply with 1 or 2`;
         lastQuoted: null
       };
 
-      console.log(`🔍 DEBUG: Vendor data to save:`, vendorData);
-
-      const savedVendor = await storage.createVendor(vendorData);
-      console.log(`🔍 DEBUG: Saved vendor:`, savedVendor);
-
-      console.log(`✅ New vendor registered: ${session.vendorName} (${vendorId}) in ${session.vendorCity}`);
+      await storage.createVendor(vendorData);
+      console.log(`✅ New vendor registered: ${session.vendorName} (${vendorId})`);
     } catch (error) {
       console.error('Failed to register vendor:', error);
       throw error;
@@ -835,13 +545,13 @@ Reply with 1 or 2`;
     const botConfig = await storage.getBotConfig();
     let template = botConfig?.vendorRateRequestTemplate || `Hi [Vendor Name], 
 
-New inquiry from Telegram:
+New inquiry:
 - Material: [Material]
 - City: [City]
 - Quantity: [Quantity]
 - Brand: [Brand]
 
-Please provide your best rate including GST and delivery charges.
+Please provide your best rate.
 
 Reply with:
 **RATE: [Price] per [Unit]**
@@ -858,37 +568,24 @@ Inquiry ID: ${inquiryId}`;
         .replace(/\[Quantity\]/g, inquiry.quantity || "Not specified")
         .replace(/\[Brand\]/g, inquiry.brand || "Any");
 
-      console.log(`📨 Sending inquiry to vendor ${vendor.name} (${vendor.phone}):`, message);
-
-      // Send actual Telegram message to the vendor if they have a telegramId
       if (vendor.telegramId && this.bot) {
         try {
           await this.bot.sendMessage(parseInt(vendor.telegramId), `🔔 **New Price Inquiry**
 
-${message}
-
-Reply with your quote in this format:
-**RATE: [Price] per [Unit]**
-**GST: [Percentage]%**
-**DELIVERY: [Charges if any]**
-
-Inquiry ID: ${inquiryId}`);
-
-          console.log(`✅ Telegram message sent to vendor ${vendor.name} (Chat ID: ${vendor.telegramId})`);
+${message}`);
+          console.log(`✅ Message sent to vendor ${vendor.name}`);
         } catch (error) {
-          console.error(`❌ Failed to send Telegram message to vendor ${vendor.name}:`, error);
-          // Fallback to logging
-          console.log(`📨 Would send to vendor ${vendor.name} (${vendor.phone}):`, message);
+          console.error(`❌ Failed to send message to vendor ${vendor.name}:`, error);
         }
-      } else {
-        // Fallback for vendors without Telegram ID
-        console.log(`📨 Would send to vendor ${vendor.name} (${vendor.phone}):`, message);
       }
 
-      // Update vendor last contacted time
-      await storage.updateVendor(vendor.id, {
-        lastQuoted: new Date()
-      });
+      try {
+        await storage.updateVendor(vendor.id, {
+          lastQuoted: new Date()
+        });
+      } catch (error) {
+        console.error('Error updating vendor:', error);
+      }
     }
   }
 
@@ -897,13 +594,43 @@ Inquiry ID: ${inquiryId}`);
       if (!this.bot) {
         throw new Error("Bot not initialized");
       }
-      // Always send real messages in Telegram (it's free!)
-      const result = await this.bot.sendMessage(chatId, message);
-      console.log(`📨 Telegram message sent to ${chatId}`);
-      return result;
+
+      // Check if this is a web session
+      const originalSessionId = this.getWebSessionId(chatId);
+      
+      if (originalSessionId) {
+        // Send to web user via Socket.io
+        if (global.io) {
+          global.io.to(`session-${originalSessionId}`).emit("bot-reply", {
+            sessionId: originalSessionId,
+            message: message
+          });
+          console.log(`📱 Web reply sent to session ${originalSessionId}`);
+        }
+      } else {
+        // Send normal Telegram message
+        const result = await this.bot.sendMessage(chatId, message);
+        console.log(`📨 Telegram message sent to ${chatId}`);
+        return result;
+      }
     } catch (error) {
-      console.error('Failed to send Telegram message:', error);
+      console.error('Failed to send message:', error);
       throw error;
+    }
+  }
+
+  async testBot() {
+    try {
+      this.initializeBot();
+      if (!this.bot) {
+        throw new Error("Bot not initialized");
+      }
+      const me = await this.bot.getMe();
+      console.log('🤖 Bot info:', me);
+      return me;
+    } catch (error) {
+      console.error('❌ Bot token error:', error);
+      return null;
     }
   }
 
@@ -917,7 +644,6 @@ Inquiry ID: ${inquiryId}`);
   }
 }
 
-// Create the bot instance with empty token initially
 export const telegramBot = new TelegramBotService({
   token: "" // Will be loaded when start() is called
 });

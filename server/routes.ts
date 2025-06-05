@@ -9,7 +9,10 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { Server as SocketIOServer } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
+import { TelegramBotService } from "./bot/telegram";
 
+//tele bot accessor
+const telegramBot = new TelegramBotService({ token: process.env.TELEGRAM_BOT_TOKEN });
 
 // API key validation middleware
 const validateApiKey = async (req: any, res: any, next: any) => {
@@ -893,37 +896,49 @@ Inquiry ID: ${inquiryId || 'undefined'}`;
     }
   });
 
-  // WebSocket connection handling
-  io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
+ // WebSocket connection handling
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
 
-    // Join chat session room
-    socket.on('join-session', (sessionId) => {
-      socket.join(`session-${sessionId}`);
-      console.log(`Client ${socket.id} joined session: ${sessionId}`);
-    });
+  // Join chat session room
+  socket.on('join-session', (sessionId) => {
+    socket.join(`session-${sessionId}`);
+    console.log(`Client ${socket.id} joined session: ${sessionId}`);
+  });
 
-    // <<< Add this snippet here inside the connection block >>>
+  // Message handler
   socket.on('message', async ({ sessionId, message }) => {
     console.log(`📩 Message from session ${sessionId}:`, message);
 
-    // Send back a response (mock or actual bot response)
-    const botReply = `Received: "${message}"`;
+    let botReply = "";
 
-    // Send the reply back to the client
+    if (message.trim() === '/start') {
+      try {
+        await telegramBot.start(false); // false = polling mode
+        botReply = "✅ Telegram bot has been started successfully.";
+      } catch (err) {
+        console.error("❌ Error starting Telegram bot:", err);
+        botReply = "❌ Failed to start Telegram bot. Check logs.";
+      }
+    } else {
+      // Default mock reply
+      botReply = `Send "/start" to start the chat`;
+    }
+
+    // Emit response to this session
     io.to(`session-${sessionId}`).emit("bot-reply", {
       sessionId,
       message: botReply
     });
   });
 
-    socket.on('disconnect', () => {
-      console.log('Client disconnected:', socket.id);
-    });
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
   });
+});
 
-  // Make io available globally for routes
-  global.io = io;
+// Make io available globally for routes
+global.io = io;
 
-  return httpServer;
+return httpServer;
 }

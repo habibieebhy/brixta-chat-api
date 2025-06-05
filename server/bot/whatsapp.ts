@@ -62,7 +62,7 @@ Reply with 1 or 2`;
 
 📍 Which city are you in?
 
-Available cities: Guwahati, Mumbai, Delhi
+Available cities: Guwahati,
 
 Please enter your city name:`;
         } else if (body === '2' || body.toLowerCase().includes('vendor')) {

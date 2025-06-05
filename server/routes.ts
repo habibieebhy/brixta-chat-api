@@ -4,16 +4,16 @@ import { storage } from "./storage";
 import { insertVendorSchema, insertInquirySchema, insertPriceResponseSchema, insertBotConfigSchema } from "@shared/schema";
 import { z } from "zod";
 import { whatsappBot } from "./bot/whatsapp";
-import { telegramBot } from "./bot/telegram";
-import { Router } from 'express';
+//import { telegramBot } from "./bot/telegram";
+//import { Router } from 'express';
 import crypto from 'crypto';
 import { Server as SocketIOServer } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
-import { TelegramBotService } from "./bot/telegram";
+import { TelegramBotService, sendTelegramMessage } from "./bot/telegram";
 
 //tele bot accessor
 const telegramBot = new TelegramBotService({ token: process.env.TELEGRAM_BOT_TOKEN });
-
+const REAL_CHAT_ID = '6616709990';
 // API key validation middleware
 const validateApiKey = async (req: any, res: any, next: any) => {
   const authHeader = req.headers.authorization;
@@ -40,7 +40,6 @@ const validateApiKey = async (req: any, res: any, next: any) => {
 };
 
 export async function registerRoutes(app: Express): Promise<Server> {
-
   // Start both bots
   await whatsappBot.start();
   await telegramBot.start();
@@ -138,7 +137,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/setup-webhook', async (req, res) => {
     try {
       // Use your ngrok URL
-      const webhookUrl = 'https://b47f-2405-201-a805-30d9-c573-2d92-1f65-7434.ngrok-free.app/webhook/telegram';
+      //const webhookUrl = 'https://b47f-2405-201-a805-30d9-c573-2d92-1f65-7434.ngrok-free.app/webhook/telegram';
+      const webhookUrl = 'https://telegram-chat-api.onrender.com/webhook/telegram';
       console.log('🔗 Setting up webhook for:', webhookUrl);
 
       const info = await telegramBot.setupWebhook(webhookUrl);
@@ -296,7 +296,6 @@ ${message}`;
   // TWO-WAY CHAT SYSTEM
   // ========================================
 
-  // Create new chat session
   // Create new chat session
   app.post("/api/chat/create-session", validateApiKey, async (req, res) => {
     try {
@@ -896,17 +895,14 @@ Inquiry ID: ${inquiryId || 'undefined'}`;
     }
   });
 
- // WebSocket connection handling
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  // Join chat session room
   socket.on('join-session', (sessionId) => {
     socket.join(`session-${sessionId}`);
     console.log(`Client ${socket.id} joined session: ${sessionId}`);
   });
 
-  // Message handler
   socket.on('message', async ({ sessionId, message }) => {
     console.log(`📩 Message from session ${sessionId}:`, message);
 
@@ -914,18 +910,16 @@ io.on('connection', (socket) => {
 
     if (message.trim() === '/start') {
       try {
-        await telegramBot.start(false); // false = polling mode
-        botReply = "✅ Telegram bot has been started successfully.";
+        await sendTelegramMessage(REAL_CHAT_ID, "/start");
+        botReply = "✅ Sent '/start' to Telegram user.";
       } catch (err) {
-        console.error("❌ Error starting Telegram bot:", err);
-        botReply = "❌ Failed to start Telegram bot. Check logs.";
+        console.error("❌ Error sending Telegram message:", err);
+        botReply = "❌ Failed to send '/start'.";
       }
     } else {
-      // Default mock reply
       botReply = `Send "/start" to start the chat`;
     }
 
-    // Emit response to this session
     io.to(`session-${sessionId}`).emit("bot-reply", {
       sessionId,
       message: botReply

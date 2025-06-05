@@ -1,9 +1,28 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { storage } from "../storage";
+import axios from 'axios';
+
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 export interface TelegramBotConfig {
   token: string;
 }
+
+export const sendTelegramMessage = async (chatId: string, text: string) => {
+  try {
+    const res = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: chatId,
+      text,
+    });
+
+    console.log(`✅ Message sent to Telegram user ${chatId}: ${text}`);
+    return res.data;
+  } catch (error: any) {
+    console.error("❌ Telegram message send failed:", error.response?.data || error.message);
+    throw error;
+  }
+};
 
 export class TelegramBotService {
   private bot: TelegramBot | null = null;
@@ -186,10 +205,18 @@ export class TelegramBotService {
   async processWebhookUpdate(update: any) {
     try {
       if (update.message && update.message.text) {
-        console.log('🔵 Webhook message received from:', update.message.chat.id, ':', update.message.text);
+        console.log(
+          '🔵 Webhook message received from:',
+          update.message.chat.id,
+          ':',
+          update.message.text
+        );
 
         // Your existing notification logic
-        if (update.message.text === '/start' || !this.userSessions.get(update.message.chat.id.toString())) {
+        if (
+          update.message.text === '/start' ||
+          !this.userSessions.get(update.message.chat.id.toString())
+        ) {
           try {
             await storage.createNotification({
               message: `🔍 New inquiry started by user ${update.message.chat.id}`,
@@ -200,26 +227,54 @@ export class TelegramBotService {
           }
         }
 
-        // Process business events  
-        if (update.message.text.includes('$') || update.message.text.includes('rate') || update.message.text.includes('quote') || update.message.text.includes('price')) {
+        // Process business events
+        if (
+          update.message.text.includes('$') ||
+          update.message.text.includes('rate') ||
+          update.message.text.includes('quote') ||
+          update.message.text.includes('price')
+        ) {
           await storage.createNotification({
             message: `💰 Vendor responded with quote: "${update.message.text}"`,
             type: 'vendor_response'
           });
-        } else if (update.message.text.includes('need') || update.message.text.includes('looking for') || update.message.text.includes('inquiry') || update.message.text.includes('quote me')) {
+        } else if (
+          update.message.text.includes('need') ||
+          update.message.text.includes('looking for') ||
+          update.message.text.includes('inquiry') ||
+          update.message.text.includes('quote me')
+        ) {
           await storage.createNotification({
             message: `🔍 New inquiry received: "${update.message.text}"`,
             type: 'new_inquiry'
           });
         }
 
-        // Handle the message using existing logic
+        // ✅ Reply to user
+        const chatId = update.message.chat.id;
+        const text = update.message.text;
+
+        let replyText = 'Reply with "/start" to start';
+
+        if (text === '/start') {
+          replyText = '👋 Welcome! Bot is active and listening.';
+        } else if (text.toLowerCase().includes('price')) {
+          replyText = '💰 We will get back to you with pricing details shortly.';
+        }
+
+        await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          chat_id: chatId,
+          text: replyText,
+        });
+
+        // ✅ Call existing message handler
         await this.handleIncomingMessage(update.message);
       }
     } catch (error) {
       console.error('❌ Error processing webhook update:', error);
     }
   }
+
 
   async testBot() {
     try {

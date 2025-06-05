@@ -13,7 +13,7 @@ import { TelegramBotService, sendTelegramMessage } from "./bot/telegram";
 
 //tele bot accessor
 const telegramBot = new TelegramBotService({ token: process.env.TELEGRAM_BOT_TOKEN });
-const REAL_CHAT_ID = '6616709990';
+const REAL_CHAT_ID = '6924933952';
 // API key validation middleware
 const validateApiKey = async (req: any, res: any, next: any) => {
   const authHeader = req.headers.authorization;
@@ -63,20 +63,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Telegram webhook endpoint for incoming messages
   app.post('/webhook/telegram', async (req, res) => {
     try {
-      console.log('🔵 Telegram webhook received:', JSON.stringify(req.body, null, 2));
+      if (req.body.message && req.body.message.text) {
+        const message = req.body.message.text;
+        const chatId = req.body.message.chat.id;
 
-      // Check if this is a Telegram update
-      if (req.body.message) {
-        // Process Telegram webhook using new method
-        await telegramBot.processWebhookUpdate(req.body);
-        res.status(200).json({ ok: true, source: 'telegram' });
-      } else {
-        // Handle other webhook types if needed
-        res.status(200).json({ ok: true, source: 'unknown' });
+        // Only process messages from your chat ID
+        if (chatId == 6924933952) {
+
+          // Check if this is a reply to a web user (contains session ID)
+          const sessionMatch = message.match(/🔗 Session: ([a-f0-9-]+)/);
+
+          if (sessionMatch) {
+            const sessionId = sessionMatch[1];
+
+            // Extract the actual reply (remove session prefix)
+            const botReply = message.replace(/🔗 Session: [a-f0-9-]+\n/, '');
+
+            // Send reply back to the specific web user
+            global.io.to(`session-${sessionId}`).emit("bot-reply", {
+              sessionId,
+              message: botReply
+            });
+
+            console.log(`✅ Reply routed to session ${sessionId}`);
+          }
+        }
       }
+
+      res.status(200).json({ ok: true });
     } catch (error) {
-      console.error('❌ Telegram webhook error:', error);
-      res.status(500).json({ error: 'Telegram webhook processing failed' });
+      console.error('❌ Webhook error:', error);
+      res.status(500).json({ error: 'Webhook processing failed' });
     }
   });
 
@@ -895,44 +912,46 @@ Inquiry ID: ${inquiryId || 'undefined'}`;
     }
   });
 
-io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
+  io.on('connection', (socket) => {
+    console.log('Client connected:', socket.id);
 
-  socket.on('join-session', (sessionId) => {
-    socket.join(`session-${sessionId}`);
-    console.log(`Client ${socket.id} joined session: ${sessionId}`);
-  });
+    socket.on('join-session', (sessionId) => {
+      socket.join(`session-${sessionId}`);
+      console.log(`Client ${socket.id} joined session: ${sessionId}`);
+    });
 
-  socket.on('message', async ({ sessionId, message }) => {
-    console.log(`📩 Message from session ${sessionId}:`, message);
+    socket.on('message', async ({ sessionId, message }) => {
+      console.log(`📩 Message from session ${sessionId}:`, message);
 
-    let botReply = "";
-
-    if (message.trim() === '/start') {
       try {
-        await sendTelegramMessage(REAL_CHAT_ID, "/start");
-        botReply = "✅ Sent '/start' to Telegram user.";
-      } catch (err) {
-        console.error("❌ Error sending Telegram message:", err);
-        botReply = "❌ Failed to send '/start'.";
-      }
-    } else {
-      botReply = `Send "/start" to start the chat`;
-    }
+        // Format message with session ID for your Telegram bot
+        const formattedMessage = `🔗 Session: ${sessionId}\n📝 ${message}`;
 
-    io.to(`session-${sessionId}`).emit("bot-reply", {
-      sessionId,
-      message: botReply
+        // Send to your Telegram chat ID (6924933952)
+        await sendTelegramMessage(REAL_CHAT_ID, formattedMessage);
+
+        console.log(`✅ Message sent to Telegram for session ${sessionId}`);
+
+        // Don't send immediate reply - wait for bot response via webhook
+
+      } catch (error) {
+        console.error('❌ Error sending to Telegram:', error);
+
+        // Send error message back to user
+        io.to(`session-${sessionId}`).emit("bot-reply", {
+          sessionId,
+          message: "❌ Sorry, there was an error sending your message. Please try again."
+        });
+      }
+    });
+
+    socket.on('disconnect', () => {
+      console.log('Client disconnected:', socket.id);
     });
   });
 
-  socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
-  });
-});
+  // Make io available globally for routes
+  global.io = io;
 
-// Make io available globally for routes
-global.io = io;
-
-return httpServer;
+  return httpServer;
 }

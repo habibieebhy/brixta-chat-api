@@ -205,70 +205,54 @@ export class TelegramBotService {
   async processWebhookUpdate(update: any) {
     try {
       if (update.message && update.message.text) {
-        console.log(
-          '🔵 Webhook message received from:',
-          update.message.chat.id,
-          ':',
-          update.message.text
-        );
-
-        // Your existing notification logic
-        if (
-          update.message.text === '/start' ||
-          !this.userSessions.get(update.message.chat.id.toString())
-        ) {
-          try {
-            await storage.createNotification({
-              message: `🔍 New inquiry started by user ${update.message.chat.id}`,
-              type: 'new_inquiry_started'
-            });
-          } catch (err) {
-            console.error('❌ Failed to create notification:', err);
-          }
-        }
-
-        // Process business events
-        if (
-          update.message.text.includes('$') ||
-          update.message.text.includes('rate') ||
-          update.message.text.includes('quote') ||
-          update.message.text.includes('price')
-        ) {
-          await storage.createNotification({
-            message: `💰 Vendor responded with quote: "${update.message.text}"`,
-            type: 'vendor_response'
-          });
-        } else if (
-          update.message.text.includes('need') ||
-          update.message.text.includes('looking for') ||
-          update.message.text.includes('inquiry') ||
-          update.message.text.includes('quote me')
-        ) {
-          await storage.createNotification({
-            message: `🔍 New inquiry received: "${update.message.text}"`,
-            type: 'new_inquiry'
-          });
-        }
-
-        // ✅ Reply to user
         const chatId = update.message.chat.id;
         const text = update.message.text;
 
-        let replyText = 'Reply with "/start" to start';
+        console.log('🔵 Webhook message received from:', chatId, ':', text);
 
-        if (text === '/start') {
-          replyText = '👋 Welcome! Bot is active and listening.';
-        } else if (text.toLowerCase().includes('price')) {
-          replyText = '💰 We will get back to you with pricing details shortly.';
+        // ✅ NEW: Handle messages from your web chat (6924933952)
+        if (chatId == 6924933952) {
+
+          // Check if this is a reply to a web user session
+          const sessionMatch = text.match(/🔗 Session: ([a-f0-9-]+)/);
+
+          if (sessionMatch) {
+            const sessionId = sessionMatch[1];
+
+            // Extract the actual reply (remove session prefix)
+            const botReply = text.replace(/🔗 Session: [a-f0-9-]+\n📝 /, '');
+
+            // Route reply back to the web user
+            if (global.io) {
+              global.io.to(`session-${sessionId}`).emit("bot-reply", {
+                sessionId,
+                message: botReply
+              });
+
+              console.log(`✅ Reply routed to web session ${sessionId}: ${botReply}`);
+            }
+
+            // Don't send auto-reply back to yourself
+            return res.status(200).json({ ok: true });
+          }
         }
 
-        await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          chat_id: chatId,
-          text: replyText,
-        });
+        // Continue with your existing business logic for other users...
+        if (chatId != 6924933952) {
+          // Your existing notification logic
+          if (text === '/start' || !this.userSessions.get(chatId.toString())) {
+            try {
+              await storage.createNotification({
+                message: `🔍 New inquiry started by user ${chatId}`,
+                type: 'new_inquiry_started'
+              });
+            } catch (err) {
+              console.error('❌ Failed to create notification:', err);
+            }
+          }
 
-        // ✅ Call existing message handler
-        await this.handleIncomingMessage(update.message);
+          await this.handleIncomingMessage(update.message);
+        }
       }
     } catch (error) {
       console.error('❌ Error processing webhook update:', error);

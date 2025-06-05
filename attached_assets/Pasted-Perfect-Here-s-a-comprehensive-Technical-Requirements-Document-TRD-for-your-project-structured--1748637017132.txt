@@ -1,0 +1,243 @@
+Perfect. Here’s a comprehensive Technical Requirements Document (TRD) for your project — structured to support development, deployment, and scaling of the multi-platform cement & TMT price bot system.
+
+⸻
+
+📄 Technical Requirements Document (TRD)
+
+Project Title: Live Cement & TMT Pricing Bot System
+Prepared By: ChatGPT
+Deadline: 4 Days
+Version: v1.0
+Last Updated: 30-May-2025
+
+⸻
+
+1. 🔍 Overview
+
+This document outlines the technical specifications for building a cross-platform bot system that:
+	•	Sends automated custom price inquiry messages to cement and TMT bar vendors.
+	•	Collects real-time price data including GST and delivery charges.
+	•	Incentivizes vendor participation via instant value display.
+	•	Exposes APIs for front-end consumption and partner usage.
+
+⸻
+
+2. ⚙️ System Architecture
+
+High-Level Components:
+
+[User] → [Telegram/WhatsApp/Facebook Bot] → [Bot Engine API] → [Database]
+                                                      ↓
+                                                  [Admin Dashboard]
+                                                      ↓
+                                                [Public REST APIs]
+
+
+⸻
+
+3. 📲 Bot Platforms
+
+Platform	API/Tech Stack Used	Requirements
+Telegram	Telegram Bot API (Node/Python)	Bot Token (BotFather)
+WhatsApp	Twilio WhatsApp API / Meta Cloud API	Verified Business Number
+Facebook	Facebook Messenger Platform	Facebook Page + App ID + Meta Dev Approval
+
+
+⸻
+
+4. 🧠 Bot Functionality
+
+4.1 Conversation Flow
+
+/start →
+1. Are you a Buyer or Vendor? [Buyer]
+2. Enter your City: [Guwahati]
+3. What do you want the price of? [TMT/Cement]
+4. Any specific brand? [Optional]
+5. Quantity? [Optional]
+6. Ready to send message to 3 suppliers in your city? [Yes]
+→ Message auto-sent to selected vendors
+
+4.2 Message Format Sent to Vendors
+
+Hi [Vendor Name], I'm [User Name] from [City].
+
+I'm looking for today's rate for [Cement/TMT Bar].
+Can you please share:
+- Latest Rate
+- GST %
+- Delivery Charges (if any)
+
+Thanks!
+
+
+⸻
+
+5. 💾 Backend System
+
+5.1 Tech Stack
+	•	Backend: Node.js (Express.js)
+	•	Database: MongoDB (Mongoose schema)
+	•	APIs: RESTful (with JSON Web Token for security)
+	•	Hosting: Render / Vercel / Railway (for quick deployment)
+	•	Storage: MongoDB Atlas or Firebase Firestore
+
+⸻
+
+5.2 Data Models
+
+📘 Vendor Schema
+
+{
+  "vendor_id": "string",
+  "name": "string",
+  "phone": "string",
+  "city": "string",
+  "materials": ["cement", "tmt"],
+  "last_quoted": "timestamp",
+  "rates": [{
+      "material": "cement",
+      "price": 380,
+      "gst": 18,
+      "delivery_charge": 50,
+      "date": "ISODate"
+  }]
+}
+
+📗 Inquiry Log Schema
+
+{
+  "inquiry_id": "string",
+  "user_name": "string",
+  "city": "string",
+  "material": "cement",
+  "brand": "ACC",
+  "quantity": "10 bags",
+  "timestamp": "ISODate",
+  "vendors_contacted": ["vendor_id_1", "vendor_id_2"]
+}
+
+
+⸻
+
+6. 🧪 APIs
+
+6.1 Authentication
+	•	API Key-based authorization
+	•	Optional JWT for admin endpoints
+
+6.2 Endpoints
+
+GET /api/rates
+
+GET /api/rates?city=guwahati&material=tmt
+Authorization: Bearer <API_KEY>
+
+POST /api/vendor-response
+
+{
+  "vendor_id": "abc123",
+  "material": "cement",
+  "price": 380,
+  "gst": 5,
+  "delivery_charge": 40,
+  "timestamp": "2025-05-30T12:00:00Z"
+}
+
+GET /api/top-vendors
+
+GET /api/top-vendors?material=tmt
+
+POST /api/inquiry-log
+
+Logs all automated messages for analysis.
+
+⸻
+
+7. 📊 Admin Dashboard
+
+Built With:
+	•	Next.js / React.js
+	•	Admin Panel Features:
+	•	Search vendors
+	•	View inquiry logs
+	•	View most active cities
+	•	View vendor leaderboard
+	•	Export pricing data
+
+⸻
+
+8. 🔔 Vendor Reward System
+
+Features:
+	•	Show vendors:
+	•	Daily quote count
+	•	Rank in city
+	•	Estimated buyer visibility
+	•	Dynamic message system:
+	•	“You’re in Top 5 suppliers in Guwahati”
+	•	“5 buyers viewed your price today!”
+
+⸻
+
+9. 🧪 Testing Requirements
+	•	✅ API Unit Tests
+	•	✅ Telegram bot simulated message test
+	•	✅ WhatsApp sandbox test via Twilio
+	•	✅ Message delivery tracking
+	•	✅ Data validation: Check for missing fields, sanitize input
+
+⸻
+
+10. 🔐 Security
+	•	API Protection:
+	•	API key required for external data access
+	•	Rate limiting (20 req/min)
+	•	Vendor Privacy:
+	•	No public phone numbers
+	•	No spam — message sent only once per inquiry
+	•	Data Storage:
+	•	Cloud-hosted (MongoDB Atlas / Firebase)
+	•	Daily backups recommended
+
+⸻
+
+11. ⏱️ Milestone Timeline
+
+Day	Deliverable
+Day 1	Telegram bot + MongoDB schema setup
+Day 2	WhatsApp + FB bots integrated + backend API
+Day 3	Admin dashboard + Reward logic
+Day 4	Testing, deployment, documentation
+
+
+⸻
+
+12. 📦 Deliverables
+	•	Telegram, WhatsApp, and Facebook bots
+	•	Backend (Node.js + MongoDB)
+	•	REST APIs with key access
+	•	Admin dashboard (React/Next.js)
+	•	Deployment instructions
+	•	Full documentation
+
+⸻
+
+13. 🚀 Deployment Targets
+
+Component	Platform
+Backend/API	Railway / Render
+MongoDB	MongoDB Atlas
+Bot Hosting	Heroku / Railway
+Dashboard	Vercel / Netlify
+
+
+⸻
+
+Let me know if you’d like:
+	•	Source code boilerplates for any module
+	•	A frontend page mockup for the vendor leaderboard
+	•	Assistance with setting up the Telegram bot token & commands
+	•	WhatsApp integration help via Twilio or Meta
+
+Shall we proceed with bot code and backend schema setup next?

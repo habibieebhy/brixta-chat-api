@@ -903,6 +903,20 @@ Inquiry ID: ${inquiryId || 'undefined'}`;
       console.log(`Client ${socket.id} joined session: ${sessionId}`);
     });
 
+    // <<< Add this snippet here inside the connection block >>>
+  socket.on('message', async ({ sessionId, message }) => {
+    console.log(`📩 Message from session ${sessionId}:`, message);
+
+    // Send back a response (mock or actual bot response)
+    const botReply = `Received: "${message}"`;
+
+    // Send the reply back to the client
+    io.to(`session-${sessionId}`).emit("bot-reply", {
+      sessionId,
+      message: botReply
+    });
+  });
+
     socket.on('disconnect', () => {
       console.log('Client disconnected:', socket.id);
     });

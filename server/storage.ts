@@ -42,14 +42,15 @@ export class DatabaseStorage {
   }
 
   async getVendors(city?: string, material?: string): Promise<Vendor[]> {
-    let query = this.db.select().from(vendors).where(eq(vendors.isActive, true));
+    let query = this.db.select().from(vendors).where(eq(vendors.isActive, true)); // ✅ FIXED
+
 
     if (city && material) {
       query = this.db.select().from(vendors).where(
         and(
           eq(vendors.isActive, true),
           eq(vendors.city, city),
-          sql`${vendors.materials} && ARRAY[${material}]`
+          sql`${material} = ANY(${vendors.materials})`
         )
       );
     }
@@ -58,14 +59,16 @@ export class DatabaseStorage {
   }
 
   async getVendorByTelegramId(telegramId: string): Promise<Vendor | null> {
-    const [vendor] = await this.db
-      .select()
-      .from(vendors)
-      .where(eq(vendors.telegramId, telegramId))
-      .limit(1);
-
-    return vendor || null;
-  }
+  console.log("🔍 Looking for vendor with telegram_id:", telegramId);
+  
+  const [vendor] = await this.db
+    .select()
+    .from(vendors)
+    .where(eq(vendors.telegramId, telegramId))  // ✅ FIXED: snake_case
+    .limit(1);
+  console.log("📋 Found vendor:", vendor || "NOT FOUND");
+  return vendor || null;
+}
 
   async updateVendor(vendorId: number, updates: Partial<Vendor>): Promise<Vendor> {
     const [vendor] = await this.db

@@ -14,6 +14,10 @@ export interface UserSession {
   quantity?: string;
 }
 
+export function isVendorSession(session: UserSession): session is UserSession & { materials: string[] } {
+  return session.userType === 'vendor' && Array.isArray(session.materials);
+}
+
 export class ConversationFlow {
   private userSessions: Map<string, UserSession> = new Map();
 

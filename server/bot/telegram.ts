@@ -217,19 +217,101 @@ export class TelegramBotService {
       // Handle completion actions for web users
       if (isComplete && session) {
         if (session.userType === 'vendor' && text?.toLowerCase().trim() === 'confirm') {
-          await this.processVendorRegistration(chatId, session);
+          try {
+            console.log("🏢 VENDOR REGISTRATION CONFIRMED for web user:", {
+              chatId,
+              session: {
+                vendorName: session.vendorName,
+                vendorCity: session.vendorCity,
+                materials: session.materials,
+                vendorPhone: session.vendorPhone
+              }
+            });
+
+            await this.processVendorRegistration(chatId, session);
+
+            const materialsText = session.materials?.join(' and ').toUpperCase() || 'your materials';
+            const successMessage = `🎉 Vendor registration successful!
+
+Welcome to our vendor network, ${session.vendorName}!
+
+You'll start receiving pricing inquiries for ${materialsText} in ${session.vendorCity}.
+
+Send /start anytime for help.`;
+
+            if (global.io) {
+              global.io.to(`session-${webSessionId}`).emit("bot-reply", {
+                sessionId: webSessionId,
+                message: successMessage
+              });
+            }
+            return; // 🔧 IMPORTANT: Return early to avoid sending message twice
+
+          } catch (error) {
+            console.error('Vendor registration failed:', error);
+            const errorMessage = `❌ Registration failed. Please try again by sending /start`;
+
+            if (global.io) {
+              global.io.to(`session-${webSessionId}`).emit("bot-reply", {
+                sessionId: webSessionId,
+                message: errorMessage
+              });
+            }
+            return; // 🔧 IMPORTANT: Return early
+          }
+
         } else if (session.userType === 'buyer' && text?.toLowerCase().trim() === 'confirm') {
+          console.log("🎯 BUYER INQUIRY CONFIRMED for web user:", {
+            chatId,
+            session,
+            webSessionId
+          });
+
           const inquiryId = `INQ_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
           this.inquirySessionMapping.set(inquiryId, webSessionId);
-          await this.processInquiry(chatId, session, inquiryId);
+
+          try {
+            await this.processInquiry(chatId, session, inquiryId);
+
+            // Send success message after inquiry processing
+            const successMessage = `🚀 Your inquiry has been sent!
+
+We've contacted vendors in ${session.city} for ${session.material} pricing. You should receive quotes shortly.
+
+📊 Inquiry ID: ${inquiryId}
+
+Send /start for a new inquiry anytime!`;
+
+            if (global.io) {
+              global.io.to(`session-${webSessionId}`).emit("bot-reply", {
+                sessionId: webSessionId,
+                message: successMessage
+              });
+            }
+            return; // 🔧 IMPORTANT: Return early
+
+          } catch (error) {
+            console.error('Inquiry processing failed:', error);
+            const errorMessage = `❌ Failed to process inquiry. Please try again.`;
+
+            if (global.io) {
+              global.io.to(`session-${webSessionId}`).emit("bot-reply", {
+                sessionId: webSessionId,
+                message: errorMessage
+              });
+            }
+            return; // 🔧 IMPORTANT: Return early
+          }
         }
       }
 
+      // 🔧 ONLY send message if we didn't return early from completion actions
       if (global.io) {
         global.io.to(`session-${webSessionId}`).emit("bot-reply", {
           sessionId: webSessionId,
           message: message
         });
+
       }
       return;
     }
@@ -256,17 +338,46 @@ export class TelegramBotService {
 
     // Process all other messages through conversation flow
     const { message, session, isComplete } = await conversationFlow.processMessage(chatId.toString(), text);
-
+   
     // Handle completion actions for Telegram users
     if (isComplete && session) {
       if (session.userType === 'vendor' && text?.toLowerCase().trim() === 'confirm') {
-        await this.processVendorRegistration(chatId, session);
+        try {
+          await this.processVendorRegistration(chatId, session);
+
+          const materialsText = session.materials?.join(' and ').toUpperCase() || 'your materials';
+          const successMessage = `🎉 Vendor registration successful!
+Welcome to our vendor network, ${session.vendorName}!
+You'll start receiving pricing inquiries for ${materialsText} in ${session.vendorCity}.
+Send /start anytime for help.`;
+
+          await this.sendMessage(chatId, successMessage);
+          return;
+        } catch (error) {
+          console.error('Vendor registration failed:', error);
+          await this.sendMessage(chatId, `❌ Registration failed. Please try again by sending /start`);
+          return;
+        }
       } else if (session.userType === 'buyer' && text?.toLowerCase().trim() === 'confirm') {
         const inquiryId = `INQ_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-        await this.processInquiry(chatId, session, inquiryId);
+
+        try {
+          await this.processInquiry(chatId, session, inquiryId);
+          const successMessage = `🚀 Your inquiry has been sent!
+We've contacted vendors in ${session.city} for ${session.material} pricing. You should receive quotes shortly.
+📊 Inquiry ID: ${inquiryId}
+Send /start for a new inquiry anytime!`;
+
+          await this.sendMessage(chatId, successMessage);
+          return;
+        } catch (error) {
+          console.error('Inquiry processing failed:', error);
+          await this.sendMessage(chatId, `❌ Failed to process inquiry. Please try again.`);
+          return;
+        }
       }
     }
-
+    // Only send message if we didn't return early
     await this.sendMessage(chatId, message);
   }
 
@@ -390,57 +501,84 @@ Inquiry ID: ${inquiryId}`);
 
   // 🆕 RESTORE: Your original processInquiry method
   private async processInquiry(chatId: number, session: any, inquiryId?: string) {
-  // Use provided inquiryId or generate new one
-  const finalInquiryId = inquiryId || `INQ-${Date.now()}`;
-  try {
-    const vendors = await storage.getVendors(session.city, session.material);
-    const selectedVendors = vendors.slice(0, 3);
-    if (selectedVendors.length > 0) {
-      await storage.createInquiry({
-        inquiryId: finalInquiryId, // 🔧 Use the finalInquiryId here
-        userName: this.isWebSession(chatId) ? "Web User" : "Telegram User",
-        userPhone: chatId.toString(),
-        city: session.city,
-        material: session.material,
-        brand: session.brand,
-        quantity: session.quantity,
-        vendorsContacted: selectedVendors.map(v => v.vendorId),
-        responseCount: 0,
-        status: "pending",
-        platform: this.isWebSession(chatId) ? "web" : "telegram"
-      });
-      // Send messages to vendors with the correct inquiry ID
-      await this.sendVendorMessages(selectedVendors, session, finalInquiryId);
+    // Use provided inquiryId or generate new one
+    const finalInquiryId = inquiryId || `INQ-${Date.now()}`;
+    try {
+      const vendors = await storage.getVendors(session.city, session.material);
+      const selectedVendors = vendors.slice(0, 3);
+      if (selectedVendors.length > 0) {
+        await storage.createInquiry({
+          inquiryId: finalInquiryId, // 🔧 Use the finalInquiryId here
+          userName: this.isWebSession(chatId) ? "Web User" : "Telegram User",
+          userPhone: chatId.toString(),
+          city: session.city,
+          material: session.material,
+          brand: session.brand,
+          quantity: session.quantity,
+          vendorsContacted: selectedVendors.map(v => v.vendorId),
+          responseCount: 0,
+          status: "pending",
+          platform: this.isWebSession(chatId) ? "web" : "telegram"
+        });
+        // Send messages to vendors with the correct inquiry ID
+        await this.sendVendorMessages(selectedVendors, session, finalInquiryId);
+      }
+    } catch (error) {
+      console.error('Error processing inquiry:', error);
     }
-  } catch (error) {
-    console.error('Error processing inquiry:', error);
   }
-}
 
   // 🆕 RESTORE: Your original processVendorRegistration method
   private async processVendorRegistration(chatId: number, session: any) {
-    const vendorId = `VEN-${Date.now()}`;
-
-    try {
-      const vendorData = {
-        vendorId,
-        name: session.vendorName,
-        phone: session.vendorPhone,
-        telegramId: chatId.toString(),
-        city: session.vendorCity,
-        materials: session.materials,
-        status: 'active',
-        registeredAt: new Date(),
-        lastQuoted: null
-      };
-
-      await storage.createVendor(vendorData);
-      console.log(`✅ New vendor registered: ${session.vendorName} (${vendorId})`);
-    } catch (error) {
-      console.error('Failed to register vendor:', error);
-      throw error;
+  const vendorId = `VEN-${Date.now()}`;
+  console.log("🏢 Processing vendor registration:", {
+    chatId,
+    vendorId,
+    session
+  });
+  try {
+    // 🔧 FIXED: Use correct snake_case field names from schema
+    const vendorData = {
+      vendorId: vendorId,                    // ✅ Matches schema
+      name: session.vendorName,              // ✅ Matches schema
+      phone: session.vendorPhone,            // ✅ Matches schema
+      telegramId: chatId.toString(),         // ✅ Matches schema
+      city: session.vendorCity,              // ✅ Matches schema
+      materials: session.materials,          // ✅ Matches schema (text array)
+      status: 'active',                      // ✅ Matches schema
+      registeredAt: new Date(),              // ✅ Matches schema
+      isActive: true,                        // ✅ Matches schema
+      responseCount: 0,                      // ✅ Matches schema
+      responseRate: "0.00",                  // ✅ Matches schema (decimal as string)
+      rank: 0,                        
+    };
+    console.log("💾 Creating vendor with data:", vendorData);
+    
+    const createdVendor = await storage.createVendor(vendorData);
+    console.log(`✅ New vendor registered:`, createdVendor);
+    
+    // 🔧 VERIFY: Check if vendor was actually created
+    const verifyVendor = await storage.getVendorByTelegramId(chatId.toString());
+    console.log("✅ Vendor verification:", verifyVendor);
+    
+    return createdVendor;
+    
+  } catch (error) {
+    console.error('❌ Failed to register vendor:', error);
+    
+    if (error instanceof Error) {
+      console.error('❌ Error details:', {
+        message: error.message,
+        name: error.name,
+        stack: error.stack
+      });
+    } else {
+      console.error('❌ Unknown error:', error);
     }
+    
+    throw error;
   }
+}
 
   // 🆕 RESTORE: Your original sendVendorMessages method
   private async sendVendorMessages(vendors: any[], inquiry: any, inquiryId: string) {

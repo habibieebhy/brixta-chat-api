@@ -37,7 +37,7 @@ const validateApiKey = async (req: any, res: any, next: any) => {
 export async function registerRoutes(app: Express): Promise<Server> {
   // Start both bots
   await whatsappBot.start();
-  await telegramBot.start();
+  await telegramBot.start(false);
 
   // WhatsApp webhook endpoint for incoming messages
   app.post("/webhook/whatsapp", async (req, res) => {
@@ -503,7 +503,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ========================================
   // API KEYS MANAGEMENT
   // ========================================
-  
+
   // Generate secure API key
   function generateApiKey(type: 'vendor_rates' | 'telegram_bot'): string {
     const prefix = type === 'vendor_rates' ? 'vr_' : 'tb_';
@@ -692,36 +692,32 @@ Inquiry ID: ${inquiryId || 'undefined'}`;
 
     socket.on('message', async ({ sessionId, message }) => {
       console.log(`📩 Message from web session ${sessionId}:`, message);
-
       try {
         // Create a unique numeric ID for this session
         const numericSessionId = parseInt(
           sessionId.replace(/[^0-9]/g, '').substring(0, 9)
         ) + 2000000000; // Start from 2 billion to avoid conflicts
-        
+
         // Store the mapping
         telegramBot.setWebSessionMapping(numericSessionId, sessionId);
-        
+
         // Create fake Telegram message
         const fakeMsg = {
           chat: { id: numericSessionId },
           text: message,
           message_id: Date.now() // Add message_id for consistency
         };
-
         // Process through bot's conversation logic
         await telegramBot.handleIncomingMessage(fakeMsg);
-
       } catch (error) {
         console.error('❌ Error processing bot message:', error);
-        
+
         io.to(`session-${sessionId}`).emit("bot-reply", {
           sessionId,
           message: "❌ Sorry, there was an error. Please try again."
         });
       }
     });
-
     socket.on('disconnect', () => {
       console.log('Client disconnected:', socket.id);
     });

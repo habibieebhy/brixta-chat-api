@@ -9,11 +9,11 @@ import crypto from 'crypto';
 import { Server as SocketIOServer } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
 
+
 declare global {
   var io: SocketIOServer | undefined;
 }
 export {};
-
 // API key validation middleware
 const validateApiKey = async (req: any, res: any, next: any) => {
   const authHeader = req.headers.authorization;
@@ -55,37 +55,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Socket.IO connection handling for web users
   socketIO.on('connection', (socket) => {
-    console.log('🌐 New web user connected:', socket.id);
-
-    socket.on('join-session', (sessionId) => {
-      console.log(`🔗 User ${socket.id} joined session: ${sessionId}`);
-      socket.join(`session-${sessionId}`);
-    });
-
-    socket.on('send-message', async (data) => {
-      const { sessionId, message } = data;
-      console.log(`💬 Web message from ${sessionId}: ${message}`);
+  console.log('🌐 New web user connected:', socket.id);
+  socket.on('join-session', (sessionId) => {
+    console.log(`🔗 User ${socket.id} joined session: ${sessionId}`);
+    socket.join(`session-${sessionId}`);
+  });
+  socket.on('send-message', async (data) => {
+    const { sessionId, message } = data;
+    console.log(`💬 Web message from ${sessionId}: ${message}`);
+    
+    try {
+      // FIXED: Process directly through bot instead of sending to Telegram chat
+      // Create a mock telegram message object for the bot to process
+      const mockTelegramMessage = {
+        text: `[API] Session: ${sessionId} | User: ${socket.id}\n${message}`,
+        chat: { id: 6924933952 } // This triggers the web user message handler
+      };
       
-      try {
-        // Send to telegram bot for processing
-        const apiMessage = `[API] Session: ${sessionId} | User: ${socket.id}
-${message}`;
-        
-        await telegramBot.sendMessage(6924933952, apiMessage);
-        
-        // Emit message to session room
-        socketIO.to(`session-${sessionId}`).emit('new-message', {
-          sessionId,
-          senderType: 'user',
-          message,
-          timestamp: new Date()
-        });
-        
-      } catch (error) {
-        console.error('Error processing web message:', error);
-        socket.emit('error', { message: 'Failed to process message' });
-      }
-    });
+      // Process through the bot's handleWebUserMessage method directly
+      await telegramBot.handleWebUserMessage(mockTelegramMessage);
+      
+      // Emit user message to session room (for display)
+      socketIO.to(`session-${sessionId}`).emit('new-message', {
+        sessionId,
+        senderType: 'user',
+        message,
+        timestamp: new Date()
+      });
+      
+    } catch (error) {
+      console.error('Error processing web message:', error);
+      socket.emit('error', { message: 'Failed to process message' });
+    }
+  });
 
     socket.on('disconnect', () => {
       console.log('🔌 Web user disconnected:', socket.id);

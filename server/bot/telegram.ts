@@ -142,7 +142,7 @@ async start(useWebhook = false) {
 }
 
   // NEW: Handle web user messages from API
-  async handleWebUserMessage(msg: any) {
+  public async handleWebUserMessage(msg: any) {
     const text = msg.text;
     const match = text.match(/\[API\] Session: ([^|]+) \| User: ([^\n]+)\n(.+)/s);
     

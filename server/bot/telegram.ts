@@ -5,7 +5,7 @@ import { Server as SocketIOServer } from 'socket.io';
 declare global {
   var io: SocketIOServer | undefined;
 }
-export {};
+export { };
 export interface TelegramBotConfig {
   token: string;
 }
@@ -23,9 +23,9 @@ export class TelegramBotService {
 
   private initializeBot() {
     if (this.bot) return;
-    
+
     const token = this.token || process.env.TELEGRAM_BOT_TOKEN;
-    
+
     if (!token || token === "demo_token" || token === "") {
       console.error("❌ No valid Telegram bot token found!");
       console.error("Expected format: 1234567890:ABC...");
@@ -33,11 +33,11 @@ export class TelegramBotService {
       console.error("Make sure TELEGRAM_BOT_TOKEN is set in your .env file");
       throw new Error("Telegram bot token is required");
     }
-    
+
     console.log("🤖 Initializing Telegram bot with token:", token.substring(0, 10) + "...");
-    
+
     try {
-      this.bot = new TelegramBot(token, { 
+      this.bot = new TelegramBot(token, {
         polling: {
           interval: 300,
           autoStart: false,
@@ -52,104 +52,104 @@ export class TelegramBotService {
     }
   }
 
-async start(useWebhook = false) {
-  try {
-    this.initializeBot();
-    
-    if (!this.bot) {
-      throw new Error("Failed to initialize Telegram bot");
-    }
+  async start(useWebhook = false) {
+    try {
+      this.initializeBot();
 
-    this.isActive = true;
-    
-    const me = await this.bot.getMe();
-    console.log('✅ Bot verified:', me.username, `(@${me.username})`);
-
-    if (!useWebhook) {
-      try {
-        if (this.bot.isPolling) {
-          await this.bot.stopPolling();
-          console.log('🛑 Stopped existing polling');
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      } catch (err) {
-        console.log('No existing polling to stop');
+      if (!this.bot) {
+        throw new Error("Failed to initialize Telegram bot");
       }
 
-      await this.bot.startPolling();
-      console.log('✅ Telegram bot started with polling');
+      this.isActive = true;
 
-      this.bot.on('message', async (msg) => {
-        if (!msg.text) return;
-        
-        console.log('🔵 Telegram message received from:', msg.chat.id, ':', msg.text);
-        
-        // Check if this is an API message from web user
-        if (msg.text?.startsWith('[API]')) {
-          await this.handleWebUserMessage(msg);
-          return;
-        }
-        
-        // Check if this is a new user starting an inquiry
-        if (msg.text === '/start' || !this.userSessions.get(msg.chat.id.toString())) {
-          try {
-            await storage.createNotification({
-              message: `🔍 New inquiry started by user ${msg.chat.id}`,
-              type: 'new_inquiry_started'
-            });
-            console.log('✅ New inquiry notification created');
-          } catch (err) {
-            console.error('❌ Failed to create new inquiry notification:', err);
-          }
-        }
-        
-        // Create notifications for important business events
+      const me = await this.bot.getMe();
+      console.log('✅ Bot verified:', me.username, `(@${me.username})`);
+
+      if (!useWebhook) {
         try {
-          if (msg.text.includes('$') || msg.text.includes('rate') || msg.text.includes('quote') || msg.text.includes('price')) {
-            await storage.createNotification({
-              message: `💰 Vendor responded with quote: "${msg.text}"`,
-              type: 'vendor_response'
-            });
-          } else if (msg.text.includes('need') || msg.text.includes('looking for') || msg.text.includes('inquiry') || msg.text.includes('quote me')) {
-            await storage.createNotification({
-              message: `🔍 New inquiry received: "${msg.text}"`,
-              type: 'new_inquiry'
-            });
+          if (this.bot.isPolling) {
+            await this.bot.stopPolling();
+            console.log('🛑 Stopped existing polling');
+            await new Promise(resolve => setTimeout(resolve, 1000));
           }
         } catch (err) {
-          console.error('Failed to create notification:', err);
+          console.log('No existing polling to stop');
         }
-        
-        await this.handleIncomingMessage(msg);
-      });
 
-      this.bot.on('error', (error) => {
-        console.error('Telegram bot error:', error);
-      });
+        await this.bot.startPolling();
+        console.log('✅ Telegram bot started with polling');
 
-      this.bot.on('polling_error', (error) => {
-        console.error('Telegram polling error:', error);
-      });
-    } else {
-      console.log('✅ Telegram bot initialized (webhook mode)');
+        this.bot.on('message', async (msg) => {
+          if (!msg.text) return;
+
+          console.log('🔵 Telegram message received from:', msg.chat.id, ':', msg.text);
+
+          // Check if this is an API message from web user
+          if (msg.text?.startsWith('[API]')) {
+            await this.handleWebUserMessage(msg);
+            return;
+          }
+
+          // Check if this is a new user starting an inquiry
+          if (msg.text === '/start' || !this.userSessions.get(msg.chat.id.toString())) {
+            try {
+              await storage.createNotification({
+                message: `🔍 New inquiry started by user ${msg.chat.id}`,
+                type: 'new_inquiry_started'
+              });
+              console.log('✅ New inquiry notification created');
+            } catch (err) {
+              console.error('❌ Failed to create new inquiry notification:', err);
+            }
+          }
+
+          // Create notifications for important business events
+          try {
+            if (msg.text.includes('$') || msg.text.includes('rate') || msg.text.includes('quote') || msg.text.includes('price')) {
+              await storage.createNotification({
+                message: `💰 Vendor responded with quote: "${msg.text}"`,
+                type: 'vendor_response'
+              });
+            } else if (msg.text.includes('need') || msg.text.includes('looking for') || msg.text.includes('inquiry') || msg.text.includes('quote me')) {
+              await storage.createNotification({
+                message: `🔍 New inquiry received: "${msg.text}"`,
+                type: 'new_inquiry'
+              });
+            }
+          } catch (err) {
+            console.error('Failed to create notification:', err);
+          }
+
+          await this.handleIncomingMessage(msg);
+        });
+
+        this.bot.on('error', (error) => {
+          console.error('Telegram bot error:', error);
+        });
+
+        this.bot.on('polling_error', (error) => {
+          console.error('Telegram polling error:', error);
+        });
+      } else {
+        console.log('✅ Telegram bot initialized (webhook mode)');
+      }
+
+    } catch (error) {
+      console.error("❌ Failed to start Telegram bot:", error);
+      this.isActive = false;
+      throw error;
     }
-      
-  } catch (error) {
-    console.error("❌ Failed to start Telegram bot:", error);
-    this.isActive = false;
-    throw error;
   }
-}
 
   // NEW: Handle web user messages from API
   public async handleWebUserMessage(msg: any) {
     const text = msg.text;
     const match = text.match(/\[API\] Session: ([^|]+) \| User: ([^\n]+)\n(.+)/s);
-    
+
     if (match) {
       const [, sessionId, userId, userMessage] = match;
       console.log('🌐 Processing web user message:', { sessionId, userId, userMessage });
-      
+
       // Get or create session for web user (stored in memory)
       let session = this.webSessions.get(sessionId);
       if (!session) {
@@ -174,18 +174,18 @@ async start(useWebhook = false) {
       };
 
       const response = await conversationFlow.processMessage(context, userMessage);
-      
+
       // Update session
       session.step = response.nextStep;
       session.data = { ...session.data, ...response.data };
-      
+
       // Store bot response
       session.messages.push({
         senderType: 'bot',
         message: response.message,
         timestamp: new Date()
       });
-      
+
       this.webSessions.set(sessionId, session);
 
       // Handle completion actions
@@ -201,7 +201,7 @@ async start(useWebhook = false) {
           timestamp: new Date(),
           senderType: 'bot'
         });
-        
+
         console.log('✅ Response sent to web user via Socket.io');
       }
     }
@@ -212,7 +212,7 @@ async start(useWebhook = false) {
 
     const chatId = msg.chat.id;
     const text = msg.text;
-    
+
     // Handle vendor rate response first
     if (await this.handleVendorRateResponse(msg)) {
       return;
@@ -234,7 +234,7 @@ async start(useWebhook = false) {
     };
 
     const response = await conversationFlow.processMessage(context, text);
-    
+
     // Update session
     session.step = response.nextStep;
     session.data = { ...session.data, ...response.data };
@@ -254,10 +254,10 @@ async start(useWebhook = false) {
     try {
       if (action === 'create_inquiry') {
         const inquiryId = `INQ-${Date.now()}`;
-        
+
         // For web users, store sessionId as userPhone for tracking
         const userPhone = platform === 'web' ? chatIdOrSessionId.toString() : data.phone;
-        
+
         await storage.createInquiry({
           inquiryId,
           userName: platform === 'web' ? 'Web User' : `User ${chatIdOrSessionId}`,
@@ -273,12 +273,12 @@ async start(useWebhook = false) {
 
         // Notify vendors
         await this.notifyVendorsOfNewInquiry(inquiryId, data);
-        
+
         console.log(`✅ Inquiry ${inquiryId} created and vendors notified`);
-        
+
       } else if (action === 'register_vendor') {
         const vendorId = `VEN-${Date.now()}`;
-        
+
         await storage.createVendor({
           vendorId,
           name: data.company,
@@ -289,7 +289,7 @@ async start(useWebhook = false) {
           isActive: true,
           responseCount: 0
         });
-        
+
         console.log(`✅ Vendor ${vendorId} registered successfully`);
       }
     } catch (error) {
@@ -306,9 +306,9 @@ async start(useWebhook = false) {
         timestamp: new Date(),
         senderType: 'bot'
       });
-      
+
       console.log(`✅ Message sent to web session: ${sessionId}`);
-      
+
       // Store in memory session
       const session = this.webSessions.get(sessionId);
       if (session) {
@@ -333,28 +333,28 @@ async start(useWebhook = false) {
   async handleVendorRateResponse(msg: any) {
     const chatId = msg.chat.id;
     const text = msg.text;
-    
+
     const ratePattern = /RATE:\s*([0-9]+(?:\.[0-9]+)?)\s*per\s*(\w+)/i;
     const gstPattern = /GST:\s*([0-9]+(?:\.[0-9]+)?)%/i;
     const deliveryPattern = /DELIVERY:\s*([0-9]+(?:\.[0-9]+)?)/i;
     const inquiryPattern = /Inquiry ID:\s*(INQ-[0-9]+)/i;
-    
+
     const rateMatch = text.match(ratePattern);
     const gstMatch = text.match(gstPattern);
     const deliveryMatch = text.match(deliveryPattern);
     const inquiryMatch = text.match(inquiryPattern);
-    
+
     if (rateMatch && inquiryMatch) {
       const rate = parseFloat(rateMatch[1]);
       const unit = rateMatch[2];
       const gst = gstMatch ? parseFloat(gstMatch[1]) : 0;
       const delivery = deliveryMatch ? parseFloat(deliveryMatch[1]) : 0;
       const inquiryId = inquiryMatch[1];
-      
+
       console.log(`📋 Rate response received from ${chatId}:`, {
         rate, unit, gst, delivery, inquiryId
       });
-      
+
       await this.processVendorRateSubmission(chatId, {
         inquiryId,
         rate,
@@ -362,7 +362,7 @@ async start(useWebhook = false) {
         gst,
         delivery
       });
-      
+
       await this.sendMessage(chatId, `✅ Thank you! Your quote has been received and sent to the buyer.
       
 📋 Your Quote:
@@ -371,7 +371,7 @@ async start(useWebhook = false) {
 🚚 Delivery: ₹${delivery}
       
 Inquiry ID: ${inquiryId}`);
- 
+
       try {
         await storage.createNotification({
           message: `✅ Vendor quote received: ${rate} per ${unit} (Inquiry #${inquiryId})`,
@@ -379,10 +379,10 @@ Inquiry ID: ${inquiryId}`);
         });
       } catch (err) {
         console.error('Failed to create notification:', err);
-      }     
+      }
       return true;
     }
-    
+
     return false;
   }
 
@@ -393,13 +393,13 @@ Inquiry ID: ${inquiryId}`);
         console.log(`❌ Vendor not found for chat ID: ${chatId}`);
         return;
       }
-      
+
       const inquiry = await storage.getInquiryById(rateData.inquiryId);
       if (!inquiry) {
         console.log(`❌ Inquiry not found: ${rateData.inquiryId}`);
         return;
       }
-      
+
       await storage.createPriceResponse({
         vendorId: vendor.vendorId,
         inquiryId: rateData.inquiryId,
@@ -408,14 +408,14 @@ Inquiry ID: ${inquiryId}`);
         gst: rateData.gst.toString(),
         deliveryCharge: rateData.delivery.toString()
       });
-      
+
       console.log(`✅ Rate saved for vendor ${vendor.name}`);
-      
+
       await storage.incrementInquiryResponses(rateData.inquiryId);
-      
+
       // Send to buyer (both web and telegram)
       await this.sendCompiledQuoteToBuyer(inquiry, rateData, vendor);
-      
+
     } catch (error) {
       console.error('Error processing vendor rate:', error);
     }
@@ -423,32 +423,53 @@ Inquiry ID: ${inquiryId}`);
 
   private async sendCompiledQuoteToBuyer(inquiry: any, rateData: any, vendor: any) {
     const buyerMessage = `🏗️ **New Quote Received!**
-
 For your inquiry: ${inquiry.material.toUpperCase()}
 📍 City: ${inquiry.city}
 📦 Quantity: ${inquiry.quantity}
-
 💼 **Vendor: ${vendor.name}**
 💰 Rate: ₹${rateData.rate} per ${rateData.unit}
 📊 GST: ${rateData.gst}%
 🚚 Delivery: ₹${rateData.delivery}
 📞 Contact: ${vendor.phone}
-
 Inquiry ID: ${inquiry.inquiryId}
-
 More quotes may follow from other vendors!`;
-
     try {
       if (inquiry.platform === 'telegram') {
         await this.sendMessage(parseInt(inquiry.userPhone), buyerMessage);
       } else if (inquiry.platform === 'web') {
-        // For web users, userPhone contains the sessionId
+        // FIXED: For web users, userPhone contains the sessionId
         const sessionId = inquiry.userPhone;
-        await this.sendMessageToWebUser(sessionId, buyerMessage);
+        console.log(`🌐 Sending quote to web session: ${sessionId}`);
+
+        // Send via Socket.io
+        const globalThis = global as any;
+        if (globalThis.io) {
+          globalThis.io.to(`session-${sessionId}`).emit('bot-message', {
+            message: buyerMessage,
+            timestamp: new Date(),
+            senderType: 'bot',
+            sessionId: sessionId
+          });
+          console.log(`✅ Quote sent to web session: ${sessionId}`);
+          // Also store in web session
+          const session = this.webSessions.get(sessionId);
+          if (session) {
+            session.messages.push({
+              senderType: 'bot',
+              message: buyerMessage,
+              timestamp: new Date()
+            });
+            this.webSessions.set(sessionId, session);
+            console.log(`💾 Quote stored in web session: ${sessionId}`);
+          } else {
+            console.error(`❌ Web session not found: ${sessionId}`);
+          }
+        } else {
+          console.error('❌ Socket.io not available for quote delivery');
+        }
       }
-      
+
       console.log(`✅ Quote sent to buyer for inquiry ${inquiry.inquiryId} via ${inquiry.platform}`);
-      
       try {
         await storage.createNotification({
           message: `📤 Quote forwarded to buyer for inquiry #${inquiry.inquiryId}`,
@@ -465,7 +486,7 @@ More quotes may follow from other vendors!`;
   private async notifyVendorsOfNewInquiry(inquiryId: string, inquiryData: any) {
     try {
       const vendors = await storage.getVendors(inquiryData.city, inquiryData.material);
-      
+
       for (const vendor of vendors) {
         if (vendor.telegramId) {
           const vendorMessage = `🆕 **NEW INQUIRY ALERT!**
@@ -491,7 +512,7 @@ Inquiry ID: ${inquiryId}`;
           await this.sendMessage(parseInt(vendor.telegramId), vendorMessage);
         }
       }
-      
+
       console.log(`✅ Notified ${vendors.length} vendors about inquiry ${inquiryId}`);
     } catch (error) {
       console.error('Error notifying vendors:', error);
@@ -500,7 +521,7 @@ Inquiry ID: ${inquiryId}`;
 
   async sendMessage(chatId: number | string, message: string) {
     if (!this.bot || !this.isActive) return;
-    
+
     try {
       await this.bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
     } catch (error) {
@@ -523,7 +544,7 @@ Inquiry ID: ${inquiryId}`;
   async setupWebhook(webhookUrl: string) {
     try {
       this.initializeBot();
-      
+
       if (!this.bot) {
         throw new Error("Bot not initialized");
       }
@@ -535,10 +556,10 @@ Inquiry ID: ${inquiryId}`;
 
       await this.bot.setWebHook(webhookUrl);
       console.log('✅ Webhook set to:', webhookUrl);
-      
+
       const info = await this.bot.getWebHookInfo();
       console.log('🔗 Webhook info:', info);
-      
+
       return info;
     } catch (error) {
       console.error('❌ Failed to setup webhook:', error);
@@ -550,7 +571,7 @@ Inquiry ID: ${inquiryId}`;
     try {
       if (update.message && update.message.text) {
         console.log('🔵 Webhook message received from:', update.message.chat.id, ':', update.message.text);
-        
+
         if (update.message.text === '/start' || !this.userSessions.get(update.message.chat.id.toString())) {
           try {
             await storage.createNotification({
@@ -561,7 +582,7 @@ Inquiry ID: ${inquiryId}`;
             console.error('❌ Failed to create notification:', err);
           }
         }
-        
+
         if (update.message.text.includes('$') || update.message.text.includes('rate') || update.message.text.includes('quote') || update.message.text.includes('price')) {
           await storage.createNotification({
             message: `💰 Vendor responded with quote: "${update.message.text}"`,
@@ -573,7 +594,7 @@ Inquiry ID: ${inquiryId}`;
             type: 'new_inquiry'
           });
         }
-        
+
         await this.handleIncomingMessage(update.message);
       }
     } catch (error) {

@@ -1,7 +1,11 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { storage } from "../storage";
 import { conversationFlow, type ConversationContext } from "../conversationFlow";
-
+import { Server as SocketIOServer } from 'socket.io';
+declare global {
+  var io: SocketIOServer | undefined;
+}
+export {};
 export interface TelegramBotConfig {
   token: string;
 }
@@ -10,6 +14,7 @@ export class TelegramBotService {
   private bot: TelegramBot | null = null;
   private isActive: boolean = true;
   private userSessions: Map<string, any> = new Map();
+  private webSessions: Map<string, any> = new Map(); // Store web session data in memory
   private token: string;
 
   constructor(config: TelegramBotConfig) {
@@ -47,94 +52,94 @@ export class TelegramBotService {
     }
   }
 
-  async start(useWebhook = false) {
-    try {
-      this.initializeBot();
-      
-      if (!this.bot) {
-        throw new Error("Failed to initialize Telegram bot");
+async start(useWebhook = false) {
+  try {
+    this.initializeBot();
+    
+    if (!this.bot) {
+      throw new Error("Failed to initialize Telegram bot");
+    }
+
+    this.isActive = true;
+    
+    const me = await this.bot.getMe();
+    console.log('✅ Bot verified:', me.username, `(@${me.username})`);
+
+    if (!useWebhook) {
+      try {
+        if (this.bot.isPolling) {
+          await this.bot.stopPolling();
+          console.log('🛑 Stopped existing polling');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      } catch (err) {
+        console.log('No existing polling to stop');
       }
 
-      this.isActive = true;
-      
-      const me = await this.bot.getMe();
-      console.log('✅ Bot verified:', me.username, `(@${me.username})`);
+      await this.bot.startPolling();
+      console.log('✅ Telegram bot started with polling');
 
-      if (!useWebhook) {
+      this.bot.on('message', async (msg) => {
+        if (!msg.text) return;
+        
+        console.log('🔵 Telegram message received from:', msg.chat.id, ':', msg.text);
+        
+        // Check if this is an API message from web user
+        if (msg.text?.startsWith('[API]')) {
+          await this.handleWebUserMessage(msg);
+          return;
+        }
+        
+        // Check if this is a new user starting an inquiry
+        if (msg.text === '/start' || !this.userSessions.get(msg.chat.id.toString())) {
+          try {
+            await storage.createNotification({
+              message: `🔍 New inquiry started by user ${msg.chat.id}`,
+              type: 'new_inquiry_started'
+            });
+            console.log('✅ New inquiry notification created');
+          } catch (err) {
+            console.error('❌ Failed to create new inquiry notification:', err);
+          }
+        }
+        
+        // Create notifications for important business events
         try {
-          if (this.bot.isPolling) {
-            await this.bot.stopPolling();
-            console.log('🛑 Stopped existing polling');
-            await new Promise(resolve => setTimeout(resolve, 1000));
+          if (msg.text.includes('$') || msg.text.includes('rate') || msg.text.includes('quote') || msg.text.includes('price')) {
+            await storage.createNotification({
+              message: `💰 Vendor responded with quote: "${msg.text}"`,
+              type: 'vendor_response'
+            });
+          } else if (msg.text.includes('need') || msg.text.includes('looking for') || msg.text.includes('inquiry') || msg.text.includes('quote me')) {
+            await storage.createNotification({
+              message: `🔍 New inquiry received: "${msg.text}"`,
+              type: 'new_inquiry'
+            });
           }
         } catch (err) {
-          console.log('No existing polling to stop');
+          console.error('Failed to create notification:', err);
         }
+        
+        await this.handleIncomingMessage(msg);
+      });
 
-        await this.bot.startPolling();
-        console.log('✅ Telegram bot started with polling');
+      this.bot.on('error', (error) => {
+        console.error('Telegram bot error:', error);
+      });
 
-        this.bot.on('message', async (msg) => {
-          if (!msg.text) return;
-          
-          console.log('🔵 Telegram message received from:', msg.chat.id, ':', msg.text);
-          
-          // Check if this is an API message from web user
-          if (msg.text?.startsWith('[API]')) {
-            await this.handleWebUserMessage(msg);
-            return;
-          }
-          
-          // Check if this is a new user starting an inquiry
-          if (msg.text === '/start' || !this.userSessions.get(msg.chat.id.toString())) {
-            try {
-              await storage.createNotification({
-                message: `🔍 New inquiry started by user ${msg.chat.id}`,
-                type: 'new_inquiry_started'
-              });
-              console.log('✅ New inquiry notification created');
-            } catch (err) {
-              console.error('❌ Failed to create new inquiry notification:', err);
-            }
-          }
-          
-          // Create notifications for important business events
-          try {
-            if (msg.text.includes('$') || msg.text.includes('rate') || msg.text.includes('quote') || msg.text.includes('price')) {
-              await storage.createNotification({
-                message: `💰 Vendor responded with quote: "${msg.text}"`,
-                type: 'vendor_response'
-              });
-            } else if (msg.text.includes('need') || msg.text.includes('looking for') || msg.text.includes('inquiry') || msg.text.includes('quote me')) {
-              await storage.createNotification({
-                message: `🔍 New inquiry received: "${msg.text}"`,
-                type: 'new_inquiry'
-              });
-            }
-          } catch (err) {
-            console.error('Failed to create notification:', err);
-          }
-          
-          await this.handleIncomingMessage(msg);
-        });
-
-        this.bot.on('error', (error) => {
-          console.error('Telegram bot error:', error);
-        });
-
-        this.bot.on('polling_error', (error) => {
-          console.error('Telegram polling error:', error);
-        });
-      } else {
-        console.log('✅ Telegram bot initialized (webhook mode)');
-      }
-      
-    } catch (error) {
-      console.error("❌ Failed to start Telegram bot:", error);
-      this.isActive = false;
-      throw error;
+      this.bot.on('polling_error', (error) => {
+        console.error('Telegram polling error:', error);
+      });
+    } else {
+      console.log('✅ Telegram bot initialized (webhook mode)');
     }
+      
+  } catch (error) {
+    console.error("❌ Failed to start Telegram bot:", error);
+    this.isActive = false;
+    throw error;
   }
+}
 
   // NEW: Handle web user messages from API
   async handleWebUserMessage(msg: any) {
@@ -145,12 +150,19 @@ export class TelegramBotService {
       const [, sessionId, userId, userMessage] = match;
       console.log('🌐 Processing web user message:', { sessionId, userId, userMessage });
       
-      // Get or create session for web user
-      let session = this.userSessions.get(sessionId);
+      // Get or create session for web user (stored in memory)
+      let session = this.webSessions.get(sessionId);
       if (!session) {
-        session = { step: 'user_type', userType: 'web', sessionId };
-        this.userSessions.set(sessionId, session);
+        session = { step: 'user_type', userType: 'web', sessionId, messages: [] };
+        this.webSessions.set(sessionId, session);
       }
+
+      // Store user message
+      session.messages.push({
+        senderType: 'user',
+        message: userMessage,
+        timestamp: new Date()
+      });
 
       // Process message through conversation flow
       const context: ConversationContext = {
@@ -166,7 +178,15 @@ export class TelegramBotService {
       // Update session
       session.step = response.nextStep;
       session.data = { ...session.data, ...response.data };
-      this.userSessions.set(sessionId, session);
+      
+      // Store bot response
+      session.messages.push({
+        senderType: 'bot',
+        message: response.message,
+        timestamp: new Date()
+      });
+      
+      this.webSessions.set(sessionId, session);
 
       // Handle completion actions
       if (response.action) {
@@ -174,26 +194,15 @@ export class TelegramBotService {
       }
 
       // Send response via Socket.io to web user
-      if (global.io) {
-        global.io.to(`session-${sessionId}`).emit('bot-message', {
+      const globalThis = global as any;
+      if (globalThis.io) {
+        globalThis.io.to(`session-${sessionId}`).emit('bot-message', {
           message: response.message,
           timestamp: new Date(),
           senderType: 'bot'
         });
         
         console.log('✅ Response sent to web user via Socket.io');
-      }
-
-      // Also save message to database
-      try {
-        await storage.createChatMessage({
-          sessionId,
-          senderType: 'bot',
-          message: response.message,
-          senderId: 'cemtem-bot'
-        });
-      } catch (error) {
-        console.error('Failed to save web chat message:', error);
       }
     }
   }
@@ -249,18 +258,18 @@ export class TelegramBotService {
         // For web users, store sessionId as userPhone for tracking
         const userPhone = platform === 'web' ? chatIdOrSessionId.toString() : data.phone;
         
-         await storage.createInquiry({
-        inquiryId,
-        userName: platform === 'web' ? 'Web User' : `User ${chatIdOrSessionId}`,
-        userPhone,
-        material: data.material,
-        quantity: data.quantity || 'Not specified',
-        city: data.city,
-        platform,
-        status: 'active',
-        vendorsContacted: [], // Initialize as empty array
-        responseCount: 0
-      });
+        await storage.createInquiry({
+          inquiryId,
+          userName: platform === 'web' ? 'Web User' : `User ${chatIdOrSessionId}`,
+          userPhone,
+          material: data.material,
+          quantity: data.quantity || 'Not specified',
+          city: data.city,
+          platform,
+          status: 'active',
+          vendorsContacted: [], // Initialize as empty array
+          responseCount: 0
+        });
 
         // Notify vendors
         await this.notifyVendorsOfNewInquiry(inquiryId, data);
@@ -290,8 +299,9 @@ export class TelegramBotService {
 
   // NEW: Send message to web user via Socket.io
   async sendMessageToWebUser(sessionId: string, message: string) {
-    if (global.io) {
-      global.io.to(`session-${sessionId}`).emit('bot-message', {
+    const globalThis = global as any;
+    if (globalThis.io) {
+      globalThis.io.to(`session-${sessionId}`).emit('bot-message', {
         message,
         timestamp: new Date(),
         senderType: 'bot'
@@ -299,20 +309,25 @@ export class TelegramBotService {
       
       console.log(`✅ Message sent to web session: ${sessionId}`);
       
-      // Save to database
-      try {
-        await storage.createChatMessage({
-          sessionId,
+      // Store in memory session
+      const session = this.webSessions.get(sessionId);
+      if (session) {
+        session.messages.push({
           senderType: 'bot',
           message,
-          senderId: 'cemtem-bot'
+          timestamp: new Date()
         });
-      } catch (error) {
-        console.error('Failed to save web message:', error);
+        this.webSessions.set(sessionId, session);
       }
     } else {
       console.error('❌ Socket.io not available for web message');
     }
+  }
+
+  // NEW: Get web session messages (for API) - FIXED: Added this method
+  getWebSessionMessages(sessionId: string): any[] {
+    const session = this.webSessions.get(sessionId);
+    return session ? session.messages : [];
   }
 
   async handleVendorRateResponse(msg: any) {
@@ -584,7 +599,9 @@ Inquiry ID: ${inquiryId}`;
   getStatus() {
     return {
       isActive: this.isActive,
-      activeSessions: this.userSessions.size,
+      activeSessions: this.userSessions.size + this.webSessions.size,
+      telegramSessions: this.userSessions.size,
+      webSessions: this.webSessions.size,
       botConnected: !!this.bot
     };
   }

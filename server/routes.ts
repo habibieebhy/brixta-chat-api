@@ -606,11 +606,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Request vendor rates
+  // 🆕 UPDATED: Request vendor rates with inquiry session mapping
   app.post("/api/admin/request-vendor-rates", async (req, res) => {
     try {
-      const { city, material, inquiryId } = req.body;
+      const { city, material, inquiryId, sessionId } = req.body;
       const botConfigData = await storage.getBotConfig();
+
+      // 🆕 NEW: Set inquiry-session mapping if sessionId provided
+      if (inquiryId && sessionId) {
+        telegramBot.setInquirySessionMapping(inquiryId, sessionId);
+        console.log(`🔗 Mapped inquiry ${inquiryId} to session ${sessionId}`);
+      }
 
       const vendors = await storage.getVendors(city, material);
       console.log(`Found ${vendors.length} vendors:`, vendors.map(v => ({ id: v.id, telegramId: v.telegramId, name: v.vendorId })));
@@ -635,6 +641,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 Material: ${material || 'undefined'}
 Location: ${city || 'undefined'}
 Inquiry ID: ${inquiryId || 'undefined'}
+
 Please reply with:
 RATE: [your rate per unit]
 GST: [GST percentage]
@@ -655,7 +662,8 @@ Inquiry ID: ${inquiryId || 'undefined'}`;
       res.json({
         success: true,
         vendorsContacted: successCount,
-        totalVendors: vendors.length
+        totalVendors: vendors.length,
+        inquiryId
       });
 
     } catch (error) {
@@ -698,7 +706,7 @@ Inquiry ID: ${inquiryId || 'undefined'}`;
         const fakeMsg = {
           chat: { id: numericSessionId },
           text: message,
-          from: { id: numericSessionId, first_name: 'WebUser' }
+          message_id: Date.now() // Add message_id for consistency
         };
 
         // Process through bot's conversation logic

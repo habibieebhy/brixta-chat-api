@@ -29,7 +29,9 @@ export class TelegramBotService {
   private isActive: boolean = true;
   private userSessions: Map<string, any> = new Map();
   private webSessionMapping: Map<number, string> = new Map(); // Maps numeric IDs to session UUIDs
+  private inquirySessionMapping = new Map<string, string>(); // 👈 ADDED THIS LINE
   private token: string;
+  private isStarted = false;
 
   constructor(config: TelegramBotConfig) {
     this.token = config.token;
@@ -181,8 +183,65 @@ export class TelegramBotService {
 
     const chatId = msg.chat.id;
     const text = msg.text;
+    const messageId = msg.message_id;
 
     console.log(`🔄 Processing message from ${chatId}: "${text}"`);
+
+    // 🆕 NEW: Check if this is a vendor quote first
+    if (text && text.includes('RATE:') && text.includes('Inquiry ID:')) {
+      await this.handleVendorQuote(chatId, text, messageId);
+      return;
+    }
+
+    // 🆕 NEW: Handle web user messages
+    const webSessionId = this.webSessionMapping.get(chatId);
+    if (webSessionId) {
+      // Check if user is asking for quotes (simplified trigger)
+      if (text && (text.toLowerCase().includes('price') || text.toLowerCase().includes('quote') || 
+          text.toLowerCase().includes('rate') || text.toLowerCase().includes('cement') || 
+          text.toLowerCase().includes('tmt') || text === '1' || text?.toLowerCase().includes('buyer'))) {
+        
+        // Generate inquiry ID and link to session
+        const inquiryId = `INQ_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+        
+        // Store the mapping
+        this.inquirySessionMapping.set(inquiryId, webSessionId);
+        
+        // Create inquiry in database
+        try {
+          await storage.createInquiry({
+            inquiryId,
+            sessionId: webSessionId,
+            chatId: chatId.toString(),
+            message: text,
+            status: 'pending'
+          });
+        } catch (error) {
+          console.error('Error creating inquiry:', error);
+        }
+        
+        const reply = `📋 Your inquiry has been created with ID: ${inquiryId}\n\n🔍 I'm now requesting quotes from our registered vendors. You'll receive their responses here in this chat.\n\n⏱️ Please wait while vendors respond...`;
+        
+        if (global.io) {
+          global.io.to(`session-${webSessionId}`).emit("bot-reply", {
+            sessionId: webSessionId,
+            message: reply
+          });
+        }
+        return;
+      }
+
+      // For other web messages, use existing conversation flow
+      const reply = await this.processWebUserMessage(chatId, text);
+      
+      if (global.io) {
+        global.io.to(`session-${webSessionId}`).emit("bot-reply", {
+          sessionId: webSessionId,
+          message: reply
+        });
+      }
+      return;
+    }
 
     // Handle /start command
     if (text === '/start') {
@@ -443,6 +502,88 @@ Reply with 1 or 2`;
     await this.sendMessage(chatId, response);
   }
 
+  // 🆕 ADD: New method for handling vendor quotes
+  private async handleVendorQuote(chatId: number, message: string, messageId: number) {
+    try {
+      console.log('🏢 Processing vendor quote from chatId:', chatId);
+      
+      // Parse vendor quote format
+      const rateMatch = message.match(/RATE:\s*([0-9.]+)/i);
+      const gstMatch = message.match(/GST:\s*([0-9.]+)%?/i);
+      const deliveryMatch = message.match(/DELIVERY:\s*(.+?)(?:\n|Inquiry|$)/i);
+      const inquiryMatch = message.match(/Inquiry ID:\s*([^\n\s]+)/i);
+
+      if (!rateMatch || !inquiryMatch) {
+        await this.sendMessage(chatId, "❌ Please use the correct format:\nRATE: [amount]\nGST: [percentage]\nDELIVERY: [timeframe]\nInquiry ID: [id]");
+        return;
+      }
+
+      const inquiryId = inquiryMatch[1];
+      
+      // Find vendor by telegram ID
+      const vendors = await storage.getAllVendors();
+      const vendor = vendors.find(v => v.telegramId === chatId.toString());
+      
+      if (!vendor) {
+        await this.sendMessage(chatId, "❌ Vendor not found. Please contact admin.");
+        return;
+      }
+
+      // Create vendor quote response
+      const quoteData = {
+        vendorId: vendor.vendorId,
+        inquiryId: inquiryId,
+        rate: parseFloat(rateMatch[1]),
+        gst: gstMatch ? parseFloat(gstMatch[1]) : 0,
+        delivery: deliveryMatch ? deliveryMatch[1].trim() : 'Not specified',
+        message: message,
+        telegramMessageId: messageId
+      };
+
+      // Save to database
+      await storage.createPriceResponse(quoteData);
+      
+      // Send quote to buyer's chat session
+      const buyerSessionId = this.inquirySessionMapping.get(inquiryId);
+      if (buyerSessionId && global.io) {
+        const quoteMessage = `📊 **New Quote Received!**
+        
+🏢 **Vendor**: ${vendor.vendorId}
+💰 **Rate**: ₹${quoteData.rate} per unit
+📋 **GST**: ${quoteData.gst}%
+🚚 **Delivery**: ${quoteData.delivery}
+📍 **Location**: ${vendor.city || 'Not specified'}
+📝 **Inquiry ID**: ${inquiryId}
+
+---
+${message}`;
+
+        global.io.to(`session-${buyerSessionId}`).emit("bot-reply", {
+          sessionId: buyerSessionId,
+          message: quoteMessage
+        });
+        
+        console.log(`✅ Quote sent to buyer session: ${buyerSessionId}`);
+      }
+
+      // Send confirmation to vendor
+      await this.sendMessage(chatId, `✅ Quote submitted successfully!\n\nRate: ₹${quoteData.rate}\nGST: ${quoteData.gst}%\nDelivery: ${quoteData.delivery}\nInquiry ID: ${quoteData.inquiryId}\n\n📤 Your quote has been sent to the buyer!`);
+
+    } catch (error) {
+      console.error('❌ Error processing vendor quote:', error);
+      await this.sendMessage(chatId, "❌ Error processing your quote. Please try again.");
+    }
+  }
+
+  // 🆕 ADD: New method for web user messages
+  private async processWebUserMessage(chatId: number, message: string): Promise<string> {
+    if (message === '/start') {
+      return "🏗️ Welcome to CemTemBot!\n\nI can help you get real-time pricing for:\n• Cement\n• TMT Bars\n\nJust tell me what material you need and your location!";
+    }
+    
+    return "I can help you get cement and TMT bar quotes. What specific material and location do you need?";
+  }
+
   async handleVendorRateResponse(msg: any) {
     const chatId = msg.chat.id;
     const text = msg.text;
@@ -632,6 +773,16 @@ ${message}`);
       console.error('❌ Bot token error:', error);
       return null;
     }
+  }
+
+  // 🆕 ADD: Helper methods
+  public setInquirySessionMapping(inquiryId: string, sessionId: string) {
+    this.inquirySessionMapping.set(inquiryId, sessionId);
+    console.log(`🔗 Mapped inquiry ${inquiryId} to session ${sessionId}`);
+  }
+
+  public getSessionByInquiry(inquiryId: string): string | undefined {
+    return this.inquirySessionMapping.get(inquiryId);
   }
 
   getStatus() {

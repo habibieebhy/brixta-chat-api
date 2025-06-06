@@ -485,7 +485,16 @@ More quotes may follow from other vendors!`;
 
   private async notifyVendorsOfNewInquiry(inquiryId: string, inquiryData: any) {
     try {
+      console.log(`🔍 notifyVendorsOfNewInquiry called with:`, { inquiryId, inquiryData });
+      console.log(`🔍 Looking for vendors in city: "${inquiryData.city}", material: "${inquiryData.material}"`);
+
       const vendors = await storage.getVendors(inquiryData.city, inquiryData.material);
+      console.log(`📋 Found ${vendors.length} vendors`);
+
+      if (vendors.length === 0) {
+        console.log(`⚠️ No vendors found for material "${inquiryData.material}" in city "${inquiryData.city}"`);
+        return;
+      }
 
       for (const vendor of vendors) {
         if (vendor.telegramId) {
@@ -507,7 +516,8 @@ Example:
 RATE: 350 per bag
 GST: 18%
 DELIVERY: 500
-Inquiry ID: ${inquiryId}`;
+Inquiry ID: ${inquiryId}
+❌ Any other format will be ignored!`;
 
           await this.sendMessage(parseInt(vendor.telegramId), vendorMessage);
         }
@@ -601,6 +611,8 @@ Inquiry ID: ${inquiryId}`;
       console.error('❌ Error processing webhook update:', error);
     }
   }
+
+
 
   async testBot() {
     try {

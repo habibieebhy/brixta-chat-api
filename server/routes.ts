@@ -45,7 +45,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize Socket.IO
   const socketIO = new SocketIOServer(httpServer, {
     cors: {
-      origin: "*",
+      origin: ["*", "https://mycoco.site", "http://localhost:3000"],
       methods: ["GET", "POST"]
     }
   });

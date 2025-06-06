@@ -4,10 +4,11 @@ import { storage } from "./storage";
 import { insertVendorSchema, insertInquirySchema, insertPriceResponseSchema, insertBotConfigSchema } from "@shared/schema";
 import { z } from "zod";
 import { whatsappBot } from "./bot/whatsapp";
+import { telegramBot } from "./bot/telegram";
+import { Router } from 'express';
 import crypto from 'crypto';
 import { Server as SocketIOServer } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
-import { telegramBot } from "./bot/telegram";
 
 // API key validation middleware
 const validateApiKey = async (req: any, res: any, next: any) => {
@@ -26,7 +27,7 @@ const validateApiKey = async (req: any, res: any, next: any) => {
     if (!apiKey || !apiKey.isActive) {
       return res.status(401).json({ error: 'Invalid or inactive API key' });
     }
-    req.apiKey = apiKey; // Store for later use
+    req.apiKey = apiKey;
     await storage.updateApiKeyLastUsed(token);
     next();
   } catch (error) {
@@ -35,9 +36,72 @@ const validateApiKey = async (req: any, res: any, next: any) => {
 };
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  const httpServer = createServer(app);
+
+  // Initialize Socket.IO
+  const io = new SocketIOServer(httpServer, {
+    cors: {
+      origin: "*",
+      methods: ["GET", "POST"]
+    }
+  });
+
+  // Make io globally available
+  global.io = io;
+
+  // Socket.IO connection handling for web users
+  io.on('connection', (socket) => {
+    console.log('🌐 New web user connected:', socket.id);
+
+    socket.on('join-session', (sessionId) => {
+      console.log(`🔗 User ${socket.id} joined session: ${sessionId}`);
+      socket.join(`session-${sessionId}`);
+
+      // Register with telegram bot
+      telegramBot.registerWebSession(sessionId, socket.id);
+    });
+
+    socket.on('send-message', async (data) => {
+      const { sessionId, message } = data;
+      console.log(`💬 Web message from ${sessionId}: ${message}`);
+
+      try {
+        // Save user message to database
+        await storage.createChatMessage({
+          sessionId,
+          senderType: 'user',
+          message,
+          senderId: socket.id
+        });
+
+        // Send to telegram bot for processing
+        const apiMessage = `[API] Session: ${sessionId} | User: ${socket.id}
+${message}`;
+
+        await telegramBot.sendMessage(6924933952, apiMessage);
+
+        // Emit message to session room
+        io.to(`session-${sessionId}`).emit('new-message', {
+          sessionId,
+          senderType: 'user',
+          message,
+          timestamp: new Date()
+        });
+
+      } catch (error) {
+        console.error('Error processing web message:', error);
+        socket.emit('error', { message: 'Failed to process message' });
+      }
+    });
+
+    socket.on('disconnect', () => {
+      console.log('🔌 Web user disconnected:', socket.id);
+    });
+  });
+
   // Start both bots
   await whatsappBot.start();
-  await telegramBot.start(false);
+  await telegramBot.start(false); // Use polling mode
 
   // WhatsApp webhook endpoint for incoming messages
   app.post("/webhook/whatsapp", async (req, res) => {
@@ -55,20 +119,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Single Telegram webhook for bot messages
+  // Telegram webhook endpoint for incoming messages
   app.post('/webhook/telegram', async (req, res) => {
     try {
       console.log('🔵 Telegram webhook received:', JSON.stringify(req.body, null, 2));
 
       if (req.body.message) {
         await telegramBot.processWebhookUpdate(req.body);
-        res.status(200).json({ ok: true });
+        res.status(200).json({ ok: true, source: 'telegram' });
       } else {
-        res.status(200).json({ ok: true });
+        res.status(200).json({ ok: true, source: 'unknown' });
       }
     } catch (error) {
       console.error('❌ Telegram webhook error:', error);
       res.status(500).json({ error: 'Telegram webhook processing failed' });
+    }
+  });
+
+  // Create web chat session
+  app.post("/api/chat/create-web-session", validateApiKey, async (req, res) => {
+    try {
+      const { userId } = req.body;
+      const authHeader = req.headers.authorization || req.headers['x-api-key'];
+      const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
+      const apiKey = await storage.getApiKey(token);
+
+      const sessionId = uuidv4();
+
+      console.log("🌐 Creating web session for userId:", userId);
+      await storage.createChatSession({
+        apiKeyId: apiKey.id,
+        sessionId,
+        userId: userId || `web_${Date.now()}`,
+        status: 'active'
+      });
+      console.log("✅ Web session created:", sessionId);
+
+      res.json({
+        success: true,
+        sessionId,
+        message: "Web chat session created successfully"
+      });
+    } catch (error) {
+      console.error('Failed to create web chat session:', error);
+      res.status(500).json({ error: "Failed to create web chat session" });
+    }
+  });
+
+  // Get chat session messages
+  app.get("/api/chat/messages/:sessionId", validateApiKey, async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      const messages = await storage.getChatMessages(sessionId);
+
+      res.json({
+        success: true,
+        messages
+      });
+    } catch (error) {
+      console.error('Failed to get chat messages:', error);
+      res.status(500).json({ error: "Failed to get chat messages" });
+    }
+  });
+
+  // Send message to web session
+  app.post("/api/chat/send-web-message", validateApiKey, async (req, res) => {
+    try {
+      const { sessionId, message } = req.body;
+
+      if (!sessionId || !message) {
+        return res.status(400).json({
+          error: "Missing required fields: sessionId and message"
+        });
+      }
+
+      // Save message to database
+      await storage.createChatMessage({
+        sessionId,
+        senderType: 'user',
+        message,
+        senderId: 'api-user'
+      });
+
+      // Send to telegram bot for processing
+      const apiMessage = `[API] Session: ${sessionId} | User: api-user
+${message}`;
+
+      await telegramBot.sendMessage(6924933952, apiMessage);
+
+      // Emit to web session
+      if (global.io) {
+        global.io.to(`session-${sessionId}`).emit('new-message', {
+          sessionId,
+          senderType: 'user',
+          message,
+          timestamp: new Date()
+        });
+      }
+
+      res.json({
+        success: true,
+        sessionId,
+        message: "Message sent successfully"
+      });
+    } catch (error) {
+      console.error('Failed to send web message:', error);
+      res.status(500).json({
+        error: "Failed to send message",
+        details: error.message
+      });
     }
   });
 
@@ -88,28 +247,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(status);
     } catch (error) {
       res.status(500).json({ error: "Failed to get Telegram bot status" });
-    }
-  });
-
-  // Test endpoint to setup Telegram webhook
-  app.get('/setup-webhook', async (req, res) => {
-    try {
-      const webhookUrl = 'https://telegram-chat-api.onrender.com/webhook/telegram';
-      console.log('🔗 Setting up webhook for:', webhookUrl);
-
-      const info = await telegramBot.setupWebhook(webhookUrl);
-
-      res.json({
-        success: true,
-        webhookUrl,
-        info
-      });
-    } catch (error) {
-      console.error('❌ Setup webhook error:', error);
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
     }
   });
 
@@ -139,22 +276,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get latest pricing data - public endpoint with API key
+  // Get latest pricing data
   app.get("/api/rates", validateApiKey, async (req, res) => {
     try {
       const { city, material, limit } = req.query;
       const rates = await storage.getVendorRates(
-        undefined, // vendorId
+        undefined,
         material as string
       );
 
-      // Filter by city if provided
       let filteredRates = rates;
       if (city) {
         filteredRates = rates.filter(rate => rate.city === city);
       }
 
-      // Limit results
       if (limit) {
         filteredRates = filteredRates.slice(0, parseInt(limit as string));
       }
@@ -174,7 +309,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const responseData = insertPriceResponseSchema.parse(req.body);
       const response = await storage.createPriceResponse(responseData);
 
-      // Update vendor last quoted time
       const vendors = await storage.getVendors();
       const vendor = vendors.find(v => v.vendorId === responseData.vendorId);
       if (vendor) {
@@ -203,7 +337,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { material, limit } = req.query;
       const vendors = await storage.getVendors(undefined, material as string);
 
-      // Sort by response count and rate
       const sortedVendors = vendors.sort((a, b) => {
         return (b.responseCount || 0) - (a.responseCount || 0);
       });
@@ -221,22 +354,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Create new chat session (standard endpoint)
-  app.post("/api/chat/sessions", validateApiKey, async (req, res) => {
+  // Send message to bot with session ID
+  app.post("/api/send-telegram-message", validateApiKey, async (req, res) => {
     try {
-      const { userId } = req.body;
-      const authHeader = req.headers.authorization || req.headers['x-api-key'];
-      let token;
-
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        token = authHeader.substring(7);
-      } else {
-        token = req.headers['x-api-key'];
+      const { sessionId, message } = req.body;
+      if (!sessionId || !message) {
+        return res.status(400).json({
+          error: "Missing required fields: sessionId and message"
+        });
       }
+      // 🆕 NEW: Format as API message for bot to handle differently
+      const apiMessage = `[API] Session: ${sessionId} | User: api_user
+${message}`;
 
+      // Send to your bot (your chat ID: 6924933952)
+      await telegramBot.sendMessage(6924933952, apiMessage);
+      res.json({
+        status: "success",
+        message: "Message sent to bot successfully",
+        sessionId: sessionId
+      });
+    } catch (error) {
+      console.error('Failed to send message to bot:', error);
+      res.status(500).json({
+        error: "Failed to send message",
+        details: error.message
+      });
+    }
+  });
+  // ========================================
+  // TWO-WAY CHAT SYSTEM
+  // ========================================
+
+  // Create new chat session
+  // Create new chat session
+  app.post("/api/chat/create-session", validateApiKey, async (req, res) => {
+    try {
+      const { userId } = req.body; // ADD THIS LINE TO EXTRACT userId
+      const authHeader = req.headers.authorization;
+      const token = authHeader.substring(7);
       const apiKey = await storage.getApiKey(token);
+
       const sessionId = uuidv4();
 
+      // Create session in database
       console.log("🔍 Creating session for userId:", userId);
       await storage.createChatSession({
         apiKeyId: apiKey.id,
@@ -256,6 +417,156 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Send message in existing session
+  app.post("/api/chat/send-message", validateApiKey, async (req, res) => {
+    try {
+      const { sessionId, userId, message } = req.body;
+
+      if (!message) {
+        return res.status(400).json({
+          error: "Missing required field: message"
+        });
+      }
+
+      // Auto-generate userId from IP if not provided
+      const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+      const finalUserId = userId || `ip_${clientIP.replace(/[.:]/g, '_')}_${Date.now()}`;
+
+      let finalSessionId = sessionId;
+      let session;
+
+      // If sessionId provided, use it directly
+      if (sessionId) {
+        session = await storage.getChatSession(sessionId);
+        console.log("🔍 Looking for session:", sessionId);
+        console.log("📋 Session found:", session);
+
+        if (!session) {
+          return res.status(404).json({ error: "Chat session not found" });
+        }
+        finalSessionId = sessionId;
+      }
+      // Find or create session using finalUserId (auto-generated from IP if needed)
+      else {
+        console.log("🔍 Looking for session by userId:", finalUserId);
+
+        // Try to find existing session for this userId
+        session = await storage.getChatSessionByUserId(finalUserId);
+
+        if (session) {
+          console.log("📋 Found existing session:", session.sessionId);
+          finalSessionId = session.sessionId;
+        } else {
+          // Auto-create new session
+          const authHeader = req.headers.authorization || req.headers['x-api-key'];
+          const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
+          const apiKey = await storage.getApiKey(token);
+
+          finalSessionId = uuidv4();
+          console.log("🆕 Auto-creating session:", finalSessionId, "for userId:", finalUserId);
+
+          await storage.createChatSession({
+            apiKeyId: apiKey.id,
+            sessionId: finalSessionId,
+            userId: finalUserId,
+            status: 'active'
+          });
+
+          console.log("✅ Session auto-created successfully");
+        }
+      }
+
+      // Save message to database
+      await storage.createChatMessage({
+        sessionId: finalSessionId,
+        senderType: 'developer',
+        message,
+        senderId: 'api-user'
+      });
+
+      // Send to Telegram with session formatting
+      const formattedMessage = `🔗 Session: ${finalSessionId}\n👤 User: ${finalUserId}\n📝 ${message}`;
+      await telegramBot.sendMessage(6924933952, formattedMessage);
+
+      // Emit to WebSocket clients
+      global.io.to(`session-${finalSessionId}`).emit('new-message', {
+        sessionId: finalSessionId,
+        senderType: 'developer',
+        message,
+        timestamp: new Date()
+      });
+
+      res.json({
+        success: true,
+        sessionId: finalSessionId,
+        userId: finalUserId,
+        message: "Message sent successfully"
+      });
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      res.status(500).json({ error: "Failed to send message" });
+    }
+  });
+  // Get chat history
+  app.get("/api/chat/history/:sessionId", validateApiKey, async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      const messages = await storage.getChatMessages(sessionId);
+
+      res.json({
+        success: true,
+        messages
+      });
+    } catch (error) {
+      console.error('Failed to get chat history:', error);
+      res.status(500).json({ error: "Failed to get chat history" });
+    }
+  });
+
+  // Telegram webhook endpoint - receives messages from bot owner
+  app.post("/api/telegram-webhook", async (req, res) => {
+    try {
+      const update = req.body;
+
+      // Check if it's a text message
+      if (update.message && update.message.text) {
+        const message = update.message.text;
+        const chatId = update.message.chat.id;
+
+        // Only process messages from bot owner (6924933952)
+        if (chatId === 6924933952) {
+          // Extract session ID from message (if it's a reply)
+          const sessionMatch = message.match(/🔗 Session: ([a-f0-9-]+)/);
+
+          if (sessionMatch) {
+            const sessionId = sessionMatch[1];
+
+            // Save message to database
+            await storage.createChatMessage({
+              sessionId,
+              senderType: 'bot_owner',
+              message,
+              senderId: 'telegram-owner',
+              telegramMessageId: update.message.message_id
+            });
+
+            // Emit to WebSocket clients
+            global.io.to(`session-${sessionId}`).emit('new-message', {
+              sessionId,
+              senderType: 'bot_owner',
+              message,
+              timestamp: new Date()
+            });
+          }
+        }
+      }
+
+      res.status(200).json({ ok: true });
+    } catch (error) {
+      console.error('Webhook error:', error);
+      res.status(500).json({ error: "Webhook processing failed" });
+    }
+  });
   // Log inquiry
   app.post("/api/inquiry-log", async (req, res) => {
     try {
@@ -488,7 +799,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Delete single notification
+  // FIXED: Delete single notification
   app.delete("/api/admin/notifications/:notificationId", async (req, res) => {
     try {
       const { notificationId } = req.params;
@@ -503,7 +814,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ========================================
   // API KEYS MANAGEMENT
   // ========================================
-
   // Generate secure API key
   function generateApiKey(type: 'vendor_rates' | 'telegram_bot'): string {
     const prefix = type === 'vendor_rates' ? 'vr_' : 'tb_';
@@ -552,7 +862,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ error: "Failed to create API key" });
     }
   });
-
   // Update API key (activate/deactivate)
   app.put("/api/admin/api-keys/:keyId", async (req, res) => {
     try {
@@ -597,7 +906,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update bot configuration
   app.put("/api/admin/bot-config", async (req, res) => {
     try {
-      const configData = req.body;
+      const configData = req.body; // Don't parse with schema for partial updates
       const config = await storage.updateBotConfig(configData);
       res.json(config);
     } catch (error) {
@@ -605,18 +914,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ error: "Failed to update bot configuration" });
     }
   });
-
-  // 🆕 UPDATED: Request vendor rates with inquiry session mapping
+  // Replace your current endpoint with this debug version:
   app.post("/api/admin/request-vendor-rates", async (req, res) => {
     try {
-      const { city, material, inquiryId, sessionId } = req.body;
+      const { city, material, inquiryId } = req.body;
+      const botConfig = await storage.getBotConfig();
       const botConfigData = await storage.getBotConfig();
-
-      // 🆕 NEW: Set inquiry-session mapping if sessionId provided
-      if (inquiryId && sessionId) {
-        telegramBot.setInquirySessionMapping(inquiryId, sessionId);
-        console.log(`🔗 Mapped inquiry ${inquiryId} to session ${sessionId}`);
-      }
+      console.log("🐛 DEBUG: Bot config loaded:", botConfigData);
+      console.log("🐛 DEBUG: vendorRateRequestTemplate:", botConfigData?.vendorRateRequestTemplate);
 
       const vendors = await storage.getVendors(city, material);
       console.log(`Found ${vendors.length} vendors:`, vendors.map(v => ({ id: v.id, telegramId: v.telegramId, name: v.vendorId })));
@@ -630,6 +935,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let successCount = 0;
       for (const vendor of vendors) {
+        console.log(`Processing vendor ${vendor.id} with telegramId: ${vendor.telegramId}`);
+
         try {
           if (vendor.telegramId) {
             const message = botConfigData?.vendorRateRequestTemplate
@@ -641,13 +948,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 Material: ${material || 'undefined'}
 Location: ${city || 'undefined'}
 Inquiry ID: ${inquiryId || 'undefined'}
-
 Please reply with:
 RATE: [your rate per unit]
 GST: [GST percentage]
 DELIVERY: [delivery time]
 Inquiry ID: ${inquiryId || 'undefined'}`;
-
+            console.log(`Attempting to send message to ${vendor.telegramId}`);
             await telegramBot.sendMessage(parseInt(vendor.telegramId), message);
             console.log(`✅ Message sent successfully to ${vendor.telegramId}`);
             successCount++;
@@ -662,8 +968,7 @@ Inquiry ID: ${inquiryId || 'undefined'}`;
       res.json({
         success: true,
         vendorsContacted: successCount,
-        totalVendors: vendors.length,
-        inquiryId
+        totalVendors: vendors.length
       });
 
     } catch (error) {
@@ -671,7 +976,6 @@ Inquiry ID: ${inquiryId || 'undefined'}`;
       res.status(500).json({ error: "Failed to send rate requests" });
     }
   });
-
   const httpServer = createServer(app);
 
   // Add Socket.IO support
@@ -682,48 +986,22 @@ Inquiry ID: ${inquiryId || 'undefined'}`;
     }
   });
 
+  // WebSocket connection handling
   io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
 
+    // Join chat session room
     socket.on('join-session', (sessionId) => {
       socket.join(`session-${sessionId}`);
       console.log(`Client ${socket.id} joined session: ${sessionId}`);
     });
 
-    socket.on('message', async ({ sessionId, message }) => {
-      console.log(`📩 Message from web session ${sessionId}:`, message);
-      try {
-        // Create a unique numeric ID for this session
-        const numericSessionId = parseInt(
-          sessionId.replace(/[^0-9]/g, '').substring(0, 9)
-        ) + 2000000000; // Start from 2 billion to avoid conflicts
-
-        // Store the mapping
-        telegramBot.setWebSessionMapping(numericSessionId, sessionId);
-
-        // Create fake Telegram message
-        const fakeMsg = {
-          chat: { id: numericSessionId },
-          text: message,
-          message_id: Date.now() // Add message_id for consistency
-        };
-        // Process through bot's conversation logic
-        await telegramBot.handleIncomingMessage(fakeMsg);
-      } catch (error) {
-        console.error('❌ Error processing bot message:', error);
-
-        io.to(`session-${sessionId}`).emit("bot-reply", {
-          sessionId,
-          message: "❌ Sorry, there was an error. Please try again."
-        });
-      }
-    });
     socket.on('disconnect', () => {
       console.log('Client disconnected:', socket.id);
     });
   });
 
-  // Make io available globally
+  // Make io available globally for routes
   global.io = io;
 
   return httpServer;

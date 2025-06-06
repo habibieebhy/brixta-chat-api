@@ -1,32 +1,30 @@
 //server/conversationFLow.ts
 //import { storage } from "./storage";
 
-export interface UserSession {
-  step: string;
-  userType?: string;
-  vendorName?: string;
-  vendorCity?: string;
-  vendorPhone?: string;
-  materials?: string[];
-  city?: string;
-  material?: string;
-  brand?: string;
-  quantity?: string;
+// conversationFlow.ts
+export interface ConversationContext {
+  chatId: string;
+  userType?: 'telegram' | 'web';
+  sessionId?: string;
+  step?: string;
+  data?: any;
 }
 
-export function isVendorSession(session: UserSession): session is UserSession & { materials: string[] } {
-  return session.userType === 'vendor' && Array.isArray(session.materials);
+export interface FlowResponse {
+  message: string;
+  nextStep?: string;
+  action?: string;
+  data?: any;
 }
 
 export class ConversationFlow {
-  private userSessions: Map<string, UserSession> = new Map();
-
-  // Initialize conversation with /start
-  public startConversation(chatId: string): { message: string; session: UserSession } {
-    this.userSessions.delete(chatId);
-    const userSession: UserSession = { step: 'user_type' };
-
-    const message = `🏗️ Welcome to CemTemBot! 
+  async processMessage(context: ConversationContext, message: string): Promise<FlowResponse> {
+    const { chatId, step, data = {} } = context;
+    
+    // Handle /start command
+    if (message === '/start' || !step) {
+      return {
+        message: `🏗️ Welcome to CemTemBot! 
 
 I help you get instant pricing for cement and TMT bars from verified vendors in your city.
 
@@ -34,267 +32,160 @@ Are you a:
 1️⃣ Buyer (looking for prices)
 2️⃣ Vendor (want to provide quotes)
 
-Reply with 1 or 2`;
+Reply with 1 or 2`,
+        nextStep: 'user_type'
+      };
+    }
 
-    this.userSessions.set(chatId, userSession);
-    return { message, session: userSession };
-  }
+    // Handle user type selection
+    if (step === 'user_type') {
+      if (message === '1') {
+        return {
+          message: `🏗️ Great! I'll help you get pricing for cement and TMT bars.
 
-  // Process user message and return response
-  public async processMessage(chatId: string, text: string): Promise<{ message: string; session: UserSession | null; isComplete?: boolean }> {
-    const userSession = this.userSessions.get(chatId) || { step: 'start' };
-    let message = '';
-    let isComplete = false;
+What material do you need pricing for?
+1️⃣ Cement
+2️⃣ TMT Bars
 
-    switch (userSession.step) {
-      case 'start':
-        message = `👋 Hello! Send /start to get started with pricing inquiries.`;
-        break;
+Reply with 1 or 2`,
+          nextStep: 'buyer_material',
+          data: { userType: 'buyer' }
+        };
+      } else if (message === '2') {
+        return {
+          message: `🏢 Welcome vendor! Let's get you registered to provide quotes.
 
-      case 'user_type':
-        if (text === '1' || text?.toLowerCase().includes('buyer')) {
-          userSession.userType = 'buyer';
-          userSession.step = 'get_city';
-          message = `Great! I'll help you find prices in your city.
+What's your company name?`,
+          nextStep: 'vendor_company',
+          data: { userType: 'vendor' }
+        };
+      } else {
+        return {
+          message: `Please reply with 1 for Buyer or 2 for Vendor`,
+          nextStep: 'user_type'
+        };
+      }
+    }
 
-📍 Which city are you in?
+    // Buyer flow
+    if (step === 'buyer_material') {
+      const material = message === '1' ? 'cement' : message === '2' ? 'tmt_bars' : null;
+      if (!material) {
+        return {
+          message: `Please reply with 1 for Cement or 2 for TMT Bars`,
+          nextStep: 'buyer_material'
+        };
+      }
 
-Available cities: Guwahati, Mumbai, Delhi
+      return {
+        message: `📍 Which city do you need ${material === 'cement' ? 'cement' : 'TMT bars'} in?
 
-Please enter your city name:`;
-        } else if (text === '2' || text?.toLowerCase().includes('vendor')) {
-          userSession.userType = 'vendor';
-          userSession.step = 'vendor_name';
-          message = `👨‍💼 Great! Let's register you as a vendor.
+Please enter your city name:`,
+        nextStep: 'buyer_city',
+        data: { ...data, material }
+      };
+    }
 
-What's your business/company name?`;
-        } else {
-          message = `Please reply with:
-1 - if you're a Buyer
-2 - if you're a Vendor`;
-        }
-        break;
+    if (step === 'buyer_city') {
+      return {
+        message: `📦 How much ${data.material === 'cement' ? 'cement' : 'TMT bars'} do you need?
 
-      case 'vendor_name':
-        userSession.vendorName = text?.trim();
-        userSession.step = 'vendor_city';
-        message = `📍 Business Name: ${userSession.vendorName}
+Please specify quantity (e.g., "50 bags" or "10 tons"):`,
+        nextStep: 'buyer_quantity',
+        data: { ...data, city: message }
+      };
+    }
 
-Which city do you operate in?
+    if (step === 'buyer_quantity') {
+      return {
+        message: `📱 Great! Please provide your phone number for vendors to contact you:`,
+        nextStep: 'buyer_phone',
+        data: { ...data, quantity: message }
+      };
+    }
 
-Available cities: Guwahati, Mumbai, Delhi
+    if (step === 'buyer_phone') {
+      return {
+        message: `✅ Perfect! Your inquiry has been created and sent to vendors in ${data.city}.
 
-Enter your city:`;
-        break;
+📋 **Your Inquiry Summary:**
+🏗️ Material: ${data.material === 'cement' ? 'Cement' : 'TMT Bars'}
+📍 City: ${data.city}
+📦 Quantity: ${data.quantity}
+📱 Contact: ${message}
 
-      case 'vendor_city':
-        userSession.vendorCity = text?.trim();
-        userSession.step = 'vendor_materials';
-        message = `📍 City: ${userSession.vendorCity}
+Vendors will send you quotes shortly!`,
+        nextStep: 'completed',
+        action: 'create_inquiry',
+        data: { ...data, phone: message }
+      };
+    }
 
-What materials do you supply?
+    // Vendor registration flow
+    if (step === 'vendor_company') {
+      return {
+        message: `📱 What's your phone number?`,
+        nextStep: 'vendor_phone',
+        data: { ...data, company: message }
+      };
+    }
+
+    if (step === 'vendor_phone') {
+      return {
+        message: `📍 Which city are you based in?`,
+        nextStep: 'vendor_city',
+        data: { ...data, phone: message }
+      };
+    }
+
+    if (step === 'vendor_city') {
+      return {
+        message: `🏗️ What materials do you supply?
 
 1️⃣ Cement only
 2️⃣ TMT Bars only  
 3️⃣ Both Cement and TMT Bars
 
-Reply with 1, 2, or 3:`;
-        break;
-
-      case 'vendor_materials':
-        if (text === '1') {
-          userSession.materials = ['cement'];
-        } else if (text === '2') {
-          userSession.materials = ['tmt'];
-        } else if (text === '3') {
-          userSession.materials = ['cement', 'tmt'];
-        } else {
-          message = `Please select:
-1 - Cement only
-2 - TMT Bars only
-3 - Both materials`;
-          break;
-        }
-        userSession.step = 'vendor_phone';
-        message = `📋 Materials: ${userSession.materials.join(', ').toUpperCase()}
-
-What's your contact phone number?
-
-Enter your phone number:`;
-        break;
-
-      case 'vendor_phone':
-        userSession.vendorPhone = text?.trim();
-        userSession.step = 'vendor_confirm';
-
-        const materialsText = userSession.materials!.join(' and ').toUpperCase();
-        message = `✅ Please confirm your vendor registration:
-
-🏢 Business: ${userSession.vendorName}
-📍 City: ${userSession.vendorCity}
-🏗️ Materials: ${materialsText}
-📞 Phone: ${userSession.vendorPhone}
-
-Reply "confirm" to register or "restart" to start over:`;
-        break;
-
-      case 'vendor_confirm':
-        if (text?.toLowerCase().trim() === 'confirm') {
-          // Vendor registration will be handled by the calling service
-          message = `🎉 Vendor registration successful!
-
-Welcome to our vendor network, ${userSession.vendorName}!
-
-You'll start receiving pricing inquiries for ${userSession.materials!.join(' and ').toUpperCase()} in ${userSession.vendorCity}.
-
-Send /start anytime for help.`;
-          this.userSessions.delete(chatId);
-          isComplete = true;
-        } else if (text?.toLowerCase().trim() === 'restart') {
-          userSession.step = 'user_type';
-          message = `🔄 Let's start over!
-
-Are you a:
-1️⃣ Buyer (looking for prices)
-2️⃣ Vendor (want to provide quotes)
-
-Reply with 1 or 2`;
-        } else {
-          message = `Please reply "confirm" to complete registration or "restart" to start over.`;
-        }
-        break;
-
-      case 'get_city':
-        userSession.city = text?.trim();
-        userSession.step = 'get_material';
-        message = `📍 City: ${userSession.city}
-
-What are you looking for?
-
-1️⃣ Cement
-2️⃣ TMT Bars
-
-Reply with 1 or 2:`;
-        break;
-
-      case 'get_material':
-        if (text === '1' || text?.toLowerCase().includes('cement')) {
-          userSession.material = 'cement';
-        } else if (text === '2' || text?.toLowerCase().includes('tmt')) {
-          userSession.material = 'tmt';
-        } else {
-          message = `Please select:
-1 - for Cement
-2 - for TMT Bars`;
-          break;
-        }
-        userSession.step = 'get_brand';
-        message = `🏷️ Any specific brand preference?
-
-For ${userSession.material}:
-- Enter brand name (e.g., ACC, Ambuja, UltraTech)
-- Or type "any" for any brand`;
-        break;
-
-      case 'get_brand':
-        userSession.brand = text?.toLowerCase() === 'any' ? null : text?.trim();
-        userSession.step = 'get_quantity';
-        message = `📦 How much quantity do you need?
-
-Examples:
-- 50 bags
-- 2 tons
-- 100 pieces
-
-Enter quantity:`;
-        break;
-
-      case 'get_quantity':
-        userSession.quantity = text?.trim();
-        userSession.step = 'confirm';
-
-        const brandText = userSession.brand ? `Brand: ${userSession.brand}` : 'Brand: Any';
-        message = `✅ Please confirm your inquiry:
-
-📍 City: ${userSession.city}
-🏗️ Material: ${userSession.material!.toUpperCase()}
-${brandText}
-📦 Quantity: ${userSession.quantity}
-
-Reply "confirm" to send to vendors or "restart" to start over:`;
-        break;
-
-      case 'confirm':
-        if (text?.toLowerCase().trim() === 'confirm') {
-          // Inquiry processing will be handled by the calling service
-          const inquiryId = `INQ_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-          
-          message = `🚀 Your inquiry has been sent!
-
-We've contacted vendors in ${userSession.city} for ${userSession.material} pricing. You should receive quotes shortly.
-
-📊 Inquiry ID: ${inquiryId}
-
-Send /start for a new inquiry anytime!`;
-          this.userSessions.delete(chatId);
-          isComplete = true;
-        } else if (text?.toLowerCase().trim() === 'restart') {
-          userSession.step = 'user_type';
-          message = `🔄 Let's start over!
-
-Are you a:
-1️⃣ Buyer (looking for prices)
-2️⃣ Vendor (want to provide quotes)
-
-Reply with 1 or 2`;
-        } else {
-          message = `Please reply "confirm" to send your inquiry or "restart" to start over.`;
-        }
-        break;
-
-      default:
-        message = `👋 Hello! Send /start to begin a new pricing inquiry.`;
-        this.userSessions.delete(chatId);
+Reply with 1, 2, or 3`,
+        nextStep: 'vendor_materials',
+        data: { ...data, city: message }
+      };
     }
 
-    // Update session if conversation is not complete
-    if (!isComplete && userSession.step !== 'start') {
-      this.userSessions.set(chatId, userSession);
+    if (step === 'vendor_materials') {
+      let materials: string[] = [];
+      if (message === '1') materials = ['cement'];
+      else if (message === '2') materials = ['tmt_bars'];
+      else if (message === '3') materials = ['cement', 'tmt_bars'];
+      else {
+        return {
+          message: `Please reply with 1, 2, or 3`,
+          nextStep: 'vendor_materials'
+        };
+      }
+
+      return {
+        message: `✅ Excellent! Your vendor registration is complete.
+
+📋 **Registration Summary:**
+🏢 Company: ${data.company}
+📱 Phone: ${data.phone}
+📍 City: ${data.city}
+🏗️ Materials: ${materials.map(m => m === 'cement' ? 'Cement' : 'TMT Bars').join(', ')}
+
+You'll now receive inquiry notifications and can send quotes!`,
+        nextStep: 'completed',
+        action: 'register_vendor',
+        data: { ...data, materials }
+      };
     }
 
-    return { 
-      message, 
-      session: isComplete ? null : userSession,
-      isComplete 
+    // Default response
+    return {
+      message: `I didn't understand that. Type /start to begin again.`,
+      nextStep: 'user_type'
     };
-  }
-
-  // Get current session
-  public getSession(chatId: string): UserSession | null {
-    return this.userSessions.get(chatId) || null;
-  }
-
-  // Clear session
-  public clearSession(chatId: string): void {
-    this.userSessions.delete(chatId);
-  }
-
-  // Helper to check if user is in conversation
-  public hasActiveSession(chatId: string): boolean {
-    return this.userSessions.has(chatId);
-  }
-
-  // Get help message
-  public getHelpMessage(): string {
-    return `🤖 CemTemBot Help:
-
-Commands:
-/start - Start a new pricing inquiry
-/help - Show this help message
-
-Simply send /start to begin!`;
   }
 }
 
-// Export singleton instance
 export const conversationFlow = new ConversationFlow();

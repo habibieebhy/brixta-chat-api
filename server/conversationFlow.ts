@@ -18,6 +18,15 @@ export interface FlowResponse {
 }
 
 export class ConversationFlow {
+  // Helper function to capitalize city names
+  private capitalizeCity(cityName: string): string {
+    return cityName
+      .toLowerCase()
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  }
+
   async processMessage(context: ConversationContext, message: string): Promise<FlowResponse> {
     const { chatId, step, data = {} } = context;
     
@@ -69,7 +78,7 @@ What's your company name?`,
 
     // Buyer flow
     if (step === 'buyer_material') {
-      const material = message === '1' ? 'cement' : message === '2' ? 'tmt_bars' : null;
+      const material = message === '1' ? 'cement' : message === '2' ? 'tmt' : null;
       if (!material) {
         return {
           message: `Please reply with 1 for Cement or 2 for TMT Bars`,
@@ -87,12 +96,15 @@ Please enter your city name:`,
     }
 
     if (step === 'buyer_city') {
+      // Auto-capitalize the city name
+      const capitalizedCity = this.capitalizeCity(message);
+      
       return {
         message: `📦 How much ${data.material === 'cement' ? 'cement' : 'TMT bars'} do you need?
 
 Please specify quantity (e.g., "50 bags" or "10 tons"):`,
         nextStep: 'buyer_quantity',
-        data: { ...data, city: message }
+        data: { ...data, city: capitalizedCity }
       };
     }
 
@@ -139,6 +151,9 @@ Vendors will send you quotes shortly!`,
     }
 
     if (step === 'vendor_city') {
+      // Auto-capitalize the city name for vendors too
+      const capitalizedVendorCity = this.capitalizeCity(message);
+      
       return {
         message: `🏗️ What materials do you supply?
 
@@ -148,15 +163,15 @@ Vendors will send you quotes shortly!`,
 
 Reply with 1, 2, or 3`,
         nextStep: 'vendor_materials',
-        data: { ...data, city: message }
+        data: { ...data, city: capitalizedVendorCity }
       };
     }
 
     if (step === 'vendor_materials') {
       let materials: string[] = [];
       if (message === '1') materials = ['cement'];
-      else if (message === '2') materials = ['tmt_bars'];
-      else if (message === '3') materials = ['cement', 'tmt_bars'];
+      else if (message === '2') materials = ['tmt'];
+      else if (message === '3') materials = ['cement', 'tmt'];
       else {
         return {
           message: `Please reply with 1, 2, or 3`,

@@ -195,6 +195,7 @@ export class TelegramBotService {
       await this.handleVendorQuote(chatId, text, messageId);
       return;
     }
+    
 
     // 🆕 NEW: Handle web user messages
     const webSessionId = this.webSessionMapping.get(chatId);
@@ -342,6 +343,20 @@ Send /start for a new inquiry anytime!`;
     // Handle completion actions for Telegram users
     if (isComplete && session) {
       if (session.userType === 'vendor' && text?.toLowerCase().trim() === 'confirm') {
+
+        // Validate session has required fields
+        if (!session.materials || !session.vendorName || !session.vendorCity) {
+          console.error('❌ Invalid vendor session - missing required fields:', {
+        materials: session.materials,
+        vendorName: session.vendorName,
+        vendorCity: session.vendorCity
+      });
+         await this.sendMessage(chatId, `❌ Registration incomplete. Please try again by sending /start`);
+      return;
+    }
+
+
+
         try {
           await this.processVendorRegistration(chatId, session);
 
@@ -359,7 +374,14 @@ Send /start anytime for help.`;
           return;
         }
       } else if (session.userType === 'buyer' && text?.toLowerCase().trim() === 'confirm') {
-        const inquiryId = `INQ_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+        // Validate session has required fields for buyer
+    if (!session.city || !session.material) {
+      console.error('Invalid buyer session - missing required fields');
+      await this.sendMessage(chatId, `❌ Inquiry incomplete. Please try again by sending /start`);
+      return;
+    }
+    
+    const inquiryId = `INQ_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
         try {
           await this.processInquiry(chatId, session, inquiryId);

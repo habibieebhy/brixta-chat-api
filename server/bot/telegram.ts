@@ -25,9 +25,9 @@ export class TelegramBotService {
 
   private initializeBot() {
     if (this.bot) return;
-    
+
     const token = this.token || process.env.TELEGRAM_BOT_TOKEN;
-    
+
     if (!token || token === "demo_token" || token === "") {
       console.error("❌ No valid Telegram bot token found!");
       console.error("Expected format: 1234567890:ABC...");
@@ -35,11 +35,11 @@ export class TelegramBotService {
       console.error("Make sure TELEGRAM_BOT_TOKEN is set in your .env file");
       throw new Error("Telegram bot token is required");
     }
-    
+
     console.log("🤖 Initializing Telegram bot with token:", token.substring(0, 10) + "...");
-    
+
     try {
-      this.bot = new TelegramBot(token, { 
+      this.bot = new TelegramBot(token, {
         polling: {
           interval: 300,
           autoStart: false,
@@ -57,13 +57,13 @@ export class TelegramBotService {
   async start(useWebhook = false) {
     try {
       this.initializeBot();
-      
+
       if (!this.bot) {
         throw new Error("Failed to initialize Telegram bot");
       }
 
       this.isActive = true;
-      
+
       const me = await this.bot.getMe();
       console.log('✅ Bot verified:', me.username, `(@${me.username})`);
 
@@ -83,15 +83,15 @@ export class TelegramBotService {
 
         this.bot.on('message', async (msg) => {
           if (!msg.text) return;
-          
+
           console.log('🔵 Telegram message received from:', msg.chat.id, ':', msg.text);
-          
+
           // NEW: Check if this is an API message from web user
           if (msg.text?.startsWith('[API]')) {
             await this.handleWebUserMessage(msg);
             return;
           }
-          
+
           // Check if this is a new user starting an inquiry
           if (msg.text === '/start' || !this.userSessions.get(msg.chat.id.toString())) {
             try {
@@ -104,7 +104,7 @@ export class TelegramBotService {
               console.error('❌ Failed to create new inquiry notification:', err);
             }
           }
-          
+
           // Only create notifications for important business events
           try {
             if (msg.text.includes('$') || msg.text.includes('rate') || msg.text.includes('quote') || msg.text.includes('price')) {
@@ -121,7 +121,7 @@ export class TelegramBotService {
           } catch (err) {
             console.error('Failed to create notification:', err);
           }
-          
+
           this.handleIncomingMessage(msg);
         });
 
@@ -135,7 +135,7 @@ export class TelegramBotService {
       } else {
         console.log('✅ Telegram bot initialized (webhook mode)');
       }
-        
+
     } catch (error) {
       console.error("❌ Failed to start Telegram bot:", error);
       this.isActive = false;
@@ -216,12 +216,12 @@ export class TelegramBotService {
 
     const chatId = msg.chat.id;
     const text = msg.text;
-    
+
     // Handle vendor rate response first
     if (await this.handleVendorRateResponse(msg)) {
       return;
     }
-    
+
     // Get or create session
     let session = this.userSessions.get(chatId.toString());
     if (!session || text === '/start') {
@@ -254,15 +254,19 @@ export class TelegramBotService {
   }
 
   // NEW: Handle completion actions for both web and telegram users
+  // Update the handleCompletionAction method with better debugging:
   async handleCompletionAction(action: string, data: any, chatIdOrSessionId: string | number, platform: 'telegram' | 'web') {
+    console.log(`🎯 handleCompletionAction called:`, { action, data, chatIdOrSessionId, platform });
+
     try {
       if (action === 'create_inquiry') {
         const inquiryId = `INQ-${Date.now()}`;
-
+        console.log(`📝 Creating inquiry with ID: ${inquiryId}`);
         // For web users, store sessionId as userPhone for tracking
         const userPhone = platform === 'web' ? chatIdOrSessionId.toString() : data.phone;
 
-        await storage.createInquiry({
+        console.log(`📞 User phone/session: ${userPhone}, Platform: ${platform}`);
+        const inquiryData = {
           inquiryId,
           userName: platform === 'web' ? 'Web User' : `User ${chatIdOrSessionId}`,
           userPhone,
@@ -273,17 +277,26 @@ export class TelegramBotService {
           status: 'active',
           vendorsContacted: [],
           responseCount: 0
+        };
+
+        console.log(`💾 Creating inquiry in storage:`, inquiryData);
+        await storage.createInquiry(inquiryData);
+        console.log(`✅ Inquiry created in storage`);
+        // Notify vendors - ADD DEBUGGING HERE
+        console.log(`📢 About to notify vendors for inquiry ${inquiryId}`);
+        console.log(`📋 Inquiry data for vendor notification:`, {
+          material: data.material,
+          city: data.city,
+          quantity: data.quantity,
+          phone: data.phone
         });
 
-        // Notify vendors
         await this.notifyVendorsOfNewInquiry(inquiryId, data);
-
-        console.log(`✅ Inquiry ${inquiryId} created and vendors notified`);
-
+        console.log(`✅ Vendor notification completed for inquiry ${inquiryId}`);
       } else if (action === 'register_vendor') {
         const vendorId = `VEN-${Date.now()}`;
-
-        await storage.createVendor({
+        console.log(`🏢 Registering vendor with ID: ${vendorId}`);
+        const vendorData = {
           vendorId,
           name: data.company,
           phone: data.phone,
@@ -292,12 +305,15 @@ export class TelegramBotService {
           telegramId: platform === 'telegram' ? chatIdOrSessionId.toString() : null,
           isActive: true,
           responseCount: 0
-        });
+        };
 
+        console.log(`💾 Creating vendor in storage:`, vendorData);
+        await storage.createVendor(vendorData);
         console.log(`✅ Vendor ${vendorId} registered successfully`);
       }
     } catch (error) {
-      console.error(`Error handling ${action}:`, error);
+      console.error(`❌ Error handling ${action}:`, error);
+      console.error(`❌ Error details:`, error.stack);
     }
   }
 
@@ -310,28 +326,28 @@ export class TelegramBotService {
   async handleVendorRateResponse(msg: any) {
     const chatId = msg.chat.id;
     const text = msg.text;
-    
+
     const ratePattern = /RATE:\s*([0-9]+(?:\.[0-9]+)?)\s*per\s*(\w+)/i;
     const gstPattern = /GST:\s*([0-9]+(?:\.[0-9]+)?)%/i;
     const deliveryPattern = /DELIVERY:\s*([0-9]+(?:\.[0-9]+)?)/i;
     const inquiryPattern = /Inquiry ID:\s*(INQ-[0-9]+)/i;
-    
+
     const rateMatch = text.match(ratePattern);
     const gstMatch = text.match(gstPattern);
     const deliveryMatch = text.match(deliveryPattern);
     const inquiryMatch = text.match(inquiryPattern);
-    
+
     if (rateMatch && inquiryMatch) {
       const rate = parseFloat(rateMatch[1]);
       const unit = rateMatch[2];
       const gst = gstMatch ? parseFloat(gstMatch[1]) : 0;
       const delivery = deliveryMatch ? parseFloat(deliveryMatch[1]) : 0;
       const inquiryId = inquiryMatch[1];
-      
+
       console.log(`📋 Rate response received from ${chatId}:`, {
         rate, unit, gst, delivery, inquiryId
       });
-      
+
       await this.processVendorRateSubmission(chatId, {
         inquiryId,
         rate,
@@ -339,7 +355,7 @@ export class TelegramBotService {
         gst,
         delivery
       });
-      
+
       await this.sendMessage(chatId, `✅ Thank you! Your quote has been received and sent to the buyer.
       
 📋 Your Quote:
@@ -348,7 +364,7 @@ export class TelegramBotService {
 🚚 Delivery: ₹${delivery}
       
 Inquiry ID: ${inquiryId}`);
-      
+
       try {
         await storage.createNotification({
           message: `✅ Vendor quote received: ${rate} per ${unit} (Inquiry #${inquiryId})`,
@@ -356,10 +372,10 @@ Inquiry ID: ${inquiryId}`);
         });
       } catch (err) {
         console.error('Failed to create notification:', err);
-      }     
+      }
       return true;
     }
-    
+
     return false;
   }
 
@@ -370,13 +386,13 @@ Inquiry ID: ${inquiryId}`);
         console.log(`❌ Vendor not found for chat ID: ${chatId}`);
         return;
       }
-      
+
       const inquiry = await storage.getInquiryById(rateData.inquiryId);
       if (!inquiry) {
         console.log(`❌ Inquiry not found: ${rateData.inquiryId}`);
         return;
       }
-      
+
       await storage.createPriceResponse({
         vendorId: vendor.vendorId,
         inquiryId: rateData.inquiryId,
@@ -385,14 +401,14 @@ Inquiry ID: ${inquiryId}`);
         gst: rateData.gst.toString(),
         deliveryCharge: rateData.delivery.toString()
       });
-      
+
       console.log(`✅ Rate saved for vendor ${vendor.name}`);
-      
+
       await storage.incrementInquiryResponses(rateData.inquiryId);
-      
+
       // Send to buyer (both web and telegram)
       await this.sendCompiledQuoteToBuyer(inquiry, rateData, vendor);
-      
+
     } catch (error) {
       console.error('Error processing vendor rate:', error);
     }
@@ -448,9 +464,9 @@ More quotes may follow from other vendors!`;
           console.error('❌ Socket.io not available for quote delivery');
         }
       }
-      
+
       console.log(`✅ Quote sent to buyer for inquiry ${inquiry.inquiryId} via ${inquiry.platform}`);
-      
+
       try {
         await storage.createNotification({
           message: `📤 Quote forwarded to buyer for inquiry #${inquiry.inquiryId}`,
@@ -467,41 +483,51 @@ More quotes may follow from other vendors!`;
   // PRESERVE THIS EXACTLY - This is what was working for vendor notifications
   private async notifyVendorsOfNewInquiry(inquiryId: string, inquiryData: any) {
     try {
+      console.log(`🔍 notifyVendorsOfNewInquiry called with:`, { inquiryId, inquiryData });
       console.log(`🔍 Looking for vendors in city: "${inquiryData.city}", material: "${inquiryData.material}"`);
-      
-      const vendors = await storage.getVendors(inquiryData.city, inquiryData.material);
-      console.log(`📋 Found ${vendors.length} vendors`);
 
+      const vendors = await storage.getVendors(inquiryData.city, inquiryData.material);
+      console.log(`📋 Found ${vendors.length} vendors:`, vendors.map(v => ({ name: v.name, telegramId: v.telegramId, city: v.city, materials: v.materials })));
+
+      if (vendors.length === 0) {
+        console.log(`⚠️ No vendors found for material "${inquiryData.material}" in city "${inquiryData.city}"`);
+        return;
+      }
       for (const vendor of vendors) {
         if (vendor.telegramId) {
-          const vendorMessage = `🆕 **NEW INQUIRY ALERT!**
+          console.log(`📤 Sending inquiry to vendor: ${vendor.name} (Telegram ID: ${vendor.telegramId})`);
 
+          const vendorMessage = `🆕 **NEW INQUIRY ALERT!**
 📋 Inquiry ID: ${inquiryId}
 🏗️ Material: ${inquiryData.material.toUpperCase()}
 📍 City: ${inquiryData.city}
-📦 Quantity: ${inquiryData.quantity}
+📦 Quantity: ${inquiryData.quantity || 'Not specified'}
 📱 Buyer Contact: ${inquiryData.phone || 'Web User'}
-
-To submit your quote, reply with:
+⚠️ **IMPORTANT: Reply with EXACT format below:**
 RATE: [your rate] per [unit]
 GST: [gst percentage]%
 DELIVERY: [delivery charge]
 Inquiry ID: ${inquiryId}
-
-Example:
+✅ **Example (copy and edit):**
 RATE: 350 per bag
 GST: 18%
 DELIVERY: 500
-Inquiry ID: ${inquiryId}`;
-
-          await this.sendMessage(parseInt(vendor.telegramId), vendorMessage);
-          console.log(`✅ Inquiry sent to vendor: ${vendor.name}`);
+Inquiry ID: ${inquiryId}
+❌ Any other format will be ignored!`;
+          try {
+            await this.sendMessage(parseInt(vendor.telegramId), vendorMessage);
+            console.log(`✅ Message sent successfully to vendor ${vendor.name}`);
+          } catch (msgError) {
+            console.error(`❌ Failed to send message to vendor ${vendor.name}:`, msgError);
+          }
+        } else {
+          console.log(`⚠️ Vendor ${vendor.name} has no Telegram ID`);
         }
       }
-
-      console.log(`✅ Notified ${vendors.length} vendors about inquiry ${inquiryId}`);
+      console.log(`✅ Notification process completed for ${vendors.length} vendors`);
     } catch (error) {
-      console.error('Error notifying vendors:', error);
+      console.error('❌ Error in notifyVendorsOfNewInquiry:', error);
+      console.error('❌ Error stack:', error.stack);
     }
   }
 
@@ -530,7 +556,7 @@ Inquiry ID: ${inquiryId}`;
   async setupWebhook(webhookUrl: string) {
     try {
       this.initializeBot();
-      
+
       if (!this.bot) {
         throw new Error("Bot not initialized");
       }
@@ -542,10 +568,10 @@ Inquiry ID: ${inquiryId}`;
 
       await this.bot.setWebHook(webhookUrl);
       console.log('✅ Webhook set to:', webhookUrl);
-      
+
       const info = await this.bot.getWebHookInfo();
       console.log('🔗 Webhook info:', info);
-      
+
       return info;
     } catch (error) {
       console.error('❌ Failed to setup webhook:', error);
@@ -557,13 +583,13 @@ Inquiry ID: ${inquiryId}`;
     try {
       if (update.message && update.message.text) {
         console.log('🔵 Webhook message received from:', update.message.chat.id, ':', update.message.text);
-        
+
         // Check for API messages first
         if (update.message.text?.startsWith('[API]')) {
           await this.handleWebUserMessage(update.message);
           return;
         }
-        
+
         if (update.message.text === '/start' || !this.userSessions.get(update.message.chat.id.toString())) {
           try {
             await storage.createNotification({
@@ -574,7 +600,7 @@ Inquiry ID: ${inquiryId}`;
             console.error('❌ Failed to create notification:', err);
           }
         }
-        
+
         if (update.message.text.includes('$') || update.message.text.includes('rate') || update.message.text.includes('quote') || update.message.text.includes('price')) {
           await storage.createNotification({
             message: `💰 Vendor responded with quote: "${update.message.text}"`,
@@ -586,7 +612,7 @@ Inquiry ID: ${inquiryId}`;
             type: 'new_inquiry'
           });
         }
-        
+
         await this.handleIncomingMessage(update.message);
       }
     } catch (error) {

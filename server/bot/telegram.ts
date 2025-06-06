@@ -29,7 +29,7 @@ export class TelegramBotService {
   private isActive: boolean = true;
   private userSessions: Map<string, any> = new Map();
   private webSessionMapping: Map<number, string> = new Map(); // Maps numeric IDs to session UUIDs
-  private inquirySessionMapping = new Map<string, string>(); // 👈 ADDED THIS LINE
+  private inquirySessionMapping = new Map<string, string>(); // 🆕 ADD THIS LINE
   private token: string;
   private isStarted = false;
 
@@ -243,6 +243,7 @@ export class TelegramBotService {
       return;
     }
 
+    // 🆕 RESTORE: Your complete original conversation flow
     // Handle /start command
     if (text === '/start') {
       this.userSessions.delete(chatId.toString());
@@ -584,6 +585,7 @@ ${message}`;
     return "I can help you get cement and TMT bar quotes. What specific material and location do you need?";
   }
 
+  // 🆕 RESTORE: Your original handleVendorRateResponse method
   async handleVendorRateResponse(msg: any) {
     const chatId = msg.chat.id;
     const text = msg.text;
@@ -628,6 +630,7 @@ Inquiry ID: ${inquiryId}`);
     return false;
   }
 
+  // 🆕 RESTORE: Your original processInquiry method
   private async processInquiry(chatId: number, session: any) {
     const inquiryId = `INQ-${Date.now()}`;
 
@@ -658,6 +661,7 @@ Inquiry ID: ${inquiryId}`);
     }
   }
 
+  // 🆕 RESTORE: Your original processVendorRegistration method
   private async processVendorRegistration(chatId: number, session: any) {
     const vendorId = `VEN-${Date.now()}`;
 
@@ -682,6 +686,7 @@ Inquiry ID: ${inquiryId}`);
     }
   }
 
+  // 🆕 RESTORE: Your original sendVendorMessages method
   private async sendVendorMessages(vendors: any[], inquiry: any, inquiryId: string) {
     const botConfig = await storage.getBotConfig();
     let template = botConfig?.vendorRateRequestTemplate || `Hi [Vendor Name], 

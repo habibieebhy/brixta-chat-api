@@ -529,56 +529,65 @@ Inquiry ID: ${inquiryId}`);
   }
 
   // 🆕 RESTORE: Your original processVendorRegistration method
-  private async processVendorRegistration(chatId: number, session: any) {
-  const vendorId = `VEN-${Date.now()}`;
-  console.log("🏢 Processing vendor registration:", {
-    chatId,
-    vendorId,
-    session
-  });
-  try {
-    // 🔧 FIXED: Use correct snake_case field names from schema
-    const vendorData = {
-      vendorId: vendorId,                    // ✅ Matches schema
-      name: session.vendorName,              // ✅ Matches schema
-      phone: session.vendorPhone,            // ✅ Matches schema
-      telegramId: chatId.toString(),         // ✅ Matches schema
-      city: session.vendorCity,              // ✅ Matches schema
-      materials: session.materials,          // ✅ Matches schema (text array)
-      status: 'active',                      // ✅ Matches schema
-      registeredAt: new Date(),              // ✅ Matches schema
-      isActive: true,                        // ✅ Matches schema
-      responseCount: 0,                      // ✅ Matches schema
-      responseRate: "0.00",                  // ✅ Matches schema (decimal as string)
-      rank: 0,                        
-    };
-    console.log("💾 Creating vendor with data:", vendorData);
-    
-    const createdVendor = await storage.createVendor(vendorData);
-    console.log(`✅ New vendor registered:`, createdVendor);
-    
-    // 🔧 VERIFY: Check if vendor was actually created
-    const verifyVendor = await storage.getVendorByTelegramId(chatId.toString());
-    console.log("✅ Vendor verification:", verifyVendor);
-    
-    return createdVendor;
-    
-  } catch (error) {
-    console.error('❌ Failed to register vendor:', error);
-    
-    if (error instanceof Error) {
-      console.error('❌ Error details:', {
-        message: error.message,
-        name: error.name,
-        stack: error.stack
-      });
-    } else {
-      console.error('❌ Unknown error:', error);
+ private async processVendorRegistration(chatId: number, session: any) {
+    const vendorId = `VEN-${Date.now()}`;
+    console.log("🏢 processVendorRegistration STARTED:", {
+      chatId,
+      vendorId,
+      session: {
+        vendorName: session.vendorName,
+        vendorCity: session.vendorCity,
+        materials: session.materials,
+        vendorPhone: session.vendorPhone
+      }
+    });
+    try {
+      // ✅ FIXED: Match exact database column names
+      const vendorData = {
+        vendorId: vendorId,                          // DB column: vendor_id
+        name: session.vendorName,                     // DB column: name
+        phone: session.vendorPhone,                   // DB column: phone
+        city: session.vendorCity,                     // DB column: city
+        materials: session.materials,                 // DB column: materials
+        lastQuoted: null,                            // DB column: last_quoted
+        isActive: true,                              // DB column: is_active
+        responseCount: 0,                            // DB column: response_count
+        responseRate: "0.00",                        // DB column: response_rate
+        rank: 0,                                      // DB column: rank
+        created_at: new Date(),                       // DB column: created_at
+        telegramId: chatId.toString(),               // DB column: telegram_id
+        status: 'active',                             // DB column: status
+        registered_at: new Date(),                    // DB column: registered_at
+      };
+      console.log("💾 VENDOR DATA PREPARED:", vendorData);
+      console.log("🎯 CALLING storage.createVendor...");
+      
+      const createdVendor = await storage.createVendor(vendorData);
+      console.log(`✅ VENDOR CREATED SUCCESSFULLY:`, createdVendor);
+      
+      // Verify creation
+      console.log("🔍 VERIFYING vendor creation...");
+      const verifyVendor = await storage.getVendorByTelegramId(chatId.toString());
+      console.log("✅ VERIFICATION RESULT:", verifyVendor);
+      
+      return createdVendor;
+      
+    } catch (error) {
+      console.error('❌ processVendorRegistration FAILED:', error);
+      
+      if (error instanceof Error) {
+        console.error('❌ Error details:', {
+          message: error.message,
+          name: error.name,
+          stack: error.stack
+        });
+      } else {
+        console.error('❌ Unknown error:', error);
+      }
+      
+      throw error;
     }
-    
-    throw error;
   }
-}
 
   // 🆕 RESTORE: Your original sendVendorMessages method
   private async sendVendorMessages(vendors: any[], inquiry: any, inquiryId: string) {

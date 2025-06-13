@@ -35,6 +35,11 @@ export const inquiries = pgTable("inquiries", {
   status: text("status").notNull().default("pending"), // "pending" | "responded" | "completed"
   platform: text("platform").default("whatsapp"), // ADDED THIS FIELD
   timestamp: timestamp("timestamp").defaultNow(),
+  cementCompany: text("cement_company"),
+  cementTypes: text("cement_types"), // JSON string of array
+  tmtCompany: text("tmt_company"),
+  tmtSizes: text("tmt_sizes"), // JSON string of array
+  buyerTeleId: text("buyer_tele_id"),
 });
 
 export const priceResponses = pgTable("price_responses", {

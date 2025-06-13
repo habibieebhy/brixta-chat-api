@@ -1,6 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { desc, eq } from 'drizzle-orm';
+import { eq, and, inArray, sql } from "drizzle-orm";
 import {
   vendors,
   inquiries,
@@ -21,7 +21,7 @@ import {
   type ApiKey,
   type InsertApiKey
 } from "../shared/schema";
-import { eq, and, inArray, sql } from "drizzle-orm";
+
 
 export class DatabaseStorage {
   private db: any;
@@ -96,6 +96,53 @@ export class DatabaseStorage {
     return vendor || null;
   }
 
+  async getVendorsByMaterialAndCity(material: string, city: string) {
+  try {
+    console.log(`🔍 Searching vendors for: ${material} in location: ${city}`);
+    
+    // Get all vendors first
+    const allVendors = await this.db.select().from(vendors);
+    console.log(`📋 Total vendors in database: ${allVendors.length}`);
+    
+    // Add null check and ensure we have an array
+    if (!allVendors || !Array.isArray(allVendors)) {
+      console.log(`❌ No vendors array returned from database`);
+      return [];
+    }
+    
+    // Filter vendors by material and city
+    const filteredVendors = allVendors.filter(vendor => {
+      // Check if vendor has materials array
+      if (!vendor.materials || !Array.isArray(vendor.materials)) {
+        console.log(`⚠️ Vendor ${vendor.name} has invalid materials:`, vendor.materials);
+        return false;
+      }
+      
+      // Check material match
+      const materialMatch = vendor.materials.includes(material);
+      
+      // Check city match (exact or partial)
+      const cityMatch = vendor.city && (
+        vendor.city.includes(city) || 
+        city.includes(vendor.city) ||
+        vendor.city.toLowerCase().includes(city.toLowerCase()) ||
+        city.toLowerCase().includes(vendor.city.toLowerCase())
+      );
+      
+      console.log(`🔍 Vendor ${vendor.name}: material=${materialMatch}, city=${cityMatch}, materials=${vendor.materials}, vendorCity=${vendor.city}`);
+      
+      return materialMatch && cityMatch;
+    });
+    
+    console.log(`✅ Found ${filteredVendors.length} matching vendors`);
+    return filteredVendors;
+    
+  } catch (error) {
+    console.error('Error fetching vendors:', error);
+    return []; // Return empty array instead of undefined
+  }
+}
+
   async updateVendor(vendorId: number, updates: Partial<Vendor>): Promise<Vendor> {
     const [vendor] = await this.db
       .update(vendors)
@@ -149,18 +196,21 @@ export class DatabaseStorage {
   }
   // Inquiry operations
   async createInquiry(inquiryData: InsertInquiry): Promise<Inquiry> {
-    const [inquiry] = await this.db.insert(inquiries).values(inquiryData).returning();
+    // Convert arrays to JSON strings for storage
+    const processedData = {
+      ...inquiryData,
+      cementTypes: inquiryData.cementTypes ?
+        (Array.isArray(inquiryData.cementTypes) ? JSON.stringify(inquiryData.cementTypes) : inquiryData.cementTypes)
+        : null,
+      tmtSizes: inquiryData.tmtSizes ?
+        (Array.isArray(inquiryData.tmtSizes) ? JSON.stringify(inquiryData.tmtSizes) : inquiryData.tmtSizes)
+        : null
+    };
+
+    console.log('🔍 Creating inquiry with processed data:', processedData);
+
+    const [inquiry] = await this.db.insert(inquiries).values(processedData).returning();
     return inquiry;
-  }
-
-  async getInquiries(limit?: number): Promise<Inquiry[]> {
-    let query = this.db.select().from(inquiries).orderBy(sql`${inquiries.timestamp} DESC`);
-
-    if (limit) {
-      query = query.limit(limit);
-    }
-
-    return await query;
   }
 
   async getInquiryById(inquiryId: string): Promise<Inquiry | null> {
@@ -170,7 +220,50 @@ export class DatabaseStorage {
       .where(eq(inquiries.inquiryId, inquiryId))
       .limit(1);
 
+    if (inquiry) {
+      // Parse JSON strings back to arrays
+      inquiry.cementTypes = this.parseJsonField(inquiry.cementTypes, 'cementTypes');
+      inquiry.tmtSizes = this.parseJsonField(inquiry.tmtSizes, 'tmtSizes');
+
+      console.log('🔍 Retrieved inquiry with parsed data:', {
+        inquiryId: inquiry.inquiryId,
+        material: inquiry.material,
+        cementTypes: inquiry.cementTypes,
+        tmtSizes: inquiry.tmtSizes
+      });
+    }
+
     return inquiry || null;
+  }
+
+  async getInquiries(limit?: number): Promise<Inquiry[]> {
+    let query = this.db.select().from(inquiries).orderBy(sql`${inquiries.timestamp} DESC`);
+
+    if (limit) {
+      query = query.limit(limit);
+    }
+
+    const inquiriesList = await query;
+
+    // Parse JSON fields for all inquiries
+    return inquiriesList.map(inquiry => {
+      inquiry.cementTypes = this.parseJsonField(inquiry.cementTypes, 'cementTypes');
+      inquiry.tmtSizes = this.parseJsonField(inquiry.tmtSizes, 'tmtSizes');
+      return inquiry;
+    });
+  }
+
+  // Add this helper method to the DatabaseStorage class
+  private parseJsonField(field: any, fieldName: string): any {
+    if (!field) return null;
+    if (typeof field !== 'string') return field; // Already parsed or not a string
+
+    try {
+      return JSON.parse(field);
+    } catch (e) {
+      console.error(`Error parsing ${fieldName}:`, e);
+      return null;
+    }
   }
 
   async incrementInquiryResponses(inquiryId: string): Promise<void> {
@@ -192,7 +285,7 @@ export class DatabaseStorage {
           status,
           updatedAt: new Date()
         })
-        .where(eq(inquiries.id, inquiryId))
+        .where(eq(inquiries.inquiryId, inquiryId))
         .returning();
 
       return inquiry || null;
@@ -206,7 +299,7 @@ export class DatabaseStorage {
     try {
       const [inquiry] = await this.db
         .delete(inquiries)
-        .where(eq(inquiries.id, inquiryId))
+        .where(eq(inquiries.inquiryId, inquiryId))
         .returning();
 
       return inquiry || null;
@@ -224,7 +317,7 @@ export class DatabaseStorage {
           status,
           updatedAt: new Date()
         })
-        .where(inArray(inquiries.id, inquiryIds))
+        .where(inArray(inquiries.inquiryId, inquiryIds))
         .returning();
 
       return { count: result.length, inquiries: result };
@@ -238,7 +331,7 @@ export class DatabaseStorage {
     try {
       const result = await this.db
         .delete(inquiries)
-        .where(inArray(inquiries.id, inquiryIds))
+        .where(inArray(inquiries.inquiryId, inquiryIds))
         .returning();
 
       return { count: result.length };
@@ -250,6 +343,7 @@ export class DatabaseStorage {
 
   // Price response operations
   async createPriceResponse(responseData: InsertPriceResponse): Promise<PriceResponse> {
+    console.log('🔍 Creating price response:', responseData);
     const [response] = await this.db.insert(priceResponses).values(responseData).returning();
     return response;
   }
@@ -339,22 +433,22 @@ export class DatabaseStorage {
   async deleteVendorRate(rateId: number): Promise<void> {
     await this.db.delete(vendorRates).where(eq(vendorRates.id, rateId));
   }
- // API Keys operations
-async createApiKey(keyData: any): Promise<ApiKey> {
-  const [apiKey] = await this.db.insert(apiKeys).values({
-    keyName: keyData.name,     // This maps to 'key_name' column
-    keyValue: keyData.keyValue, // This maps to 'key_value' column
-    isActive: keyData.isActive,
-    keyType: keyData.keyType || 'vendor_rates',
-    permissions: keyData.permissions || [],
-    rateLimitPerHour: keyData.rateLimitPerHour || 1000,
-    usageCount: 0
-  }).returning();
-  return apiKey;
-}
-async getApiKeys(): Promise<ApiKey[]> {
-  return await this.db.select().from(apiKeys).orderBy(apiKeys.createdAt);
-}
+  // API Keys operations
+  async createApiKey(keyData: any): Promise<ApiKey> {
+    const [apiKey] = await this.db.insert(apiKeys).values({
+      keyName: keyData.name,     // This maps to 'key_name' column
+      keyValue: keyData.keyValue, // This maps to 'key_value' column
+      isActive: keyData.isActive,
+      keyType: keyData.keyType || 'vendor_rates',
+      permissions: keyData.permissions || [],
+      rateLimitPerHour: keyData.rateLimitPerHour || 1000,
+      usageCount: 0
+    }).returning();
+    return apiKey;
+  }
+  async getApiKeys(): Promise<ApiKey[]> {
+    return await this.db.select().from(apiKeys).orderBy(apiKeys.createdAt);
+  }
   async getActiveApiKeys(): Promise<ApiKey[]> {
     return await this.db
       .select()
@@ -401,61 +495,98 @@ async getApiKeys(): Promise<ApiKey[]> {
       .where(eq(apiKeys.keyValue, keyValue));
   }
   async validateApiKey(keyValue: string): Promise<ApiKey | null> {
-  const [apiKey] = await this.db
-    .select()
-    .from(apiKeys)
-    .where(and(
-      eq(apiKeys.keyValue, keyValue),
-      eq(apiKeys.isActive, true)
-    ));
-  return apiKey || null;
-}
-async updateApiKeyUsage(keyValue: string): Promise<void> {
-  await this.db
-    .update(apiKeys)
-    .set({ 
-      usageCount: sql`${apiKeys.usageCount} + 1`,
-      lastUsed: new Date()
-    })
-    .where(eq(apiKeys.keyValue, keyValue));
-}
+    const [apiKey] = await this.db
+      .select()
+      .from(apiKeys)
+      .where(and(
+        eq(apiKeys.keyValue, keyValue),
+        eq(apiKeys.isActive, true)
+      ));
+    return apiKey || null;
+  }
+  async updateApiKeyUsage(keyValue: string): Promise<void> {
+    await this.db
+      .update(apiKeys)
+      .set({
+        usageCount: sql`${apiKeys.usageCount} + 1`,
+        lastUsed: new Date()
+      })
+      .where(eq(apiKeys.keyValue, keyValue));
+  }
 
   // FIXED: Notification operations that actually work
   async getNotifications(): Promise<any[]> {
-    const result = await this.db.execute(sql`SELECT * FROM notifications ORDER BY created_at DESC`);
-    return result.rows || [];
+    try {
+      const result = await this.db.execute(sql`
+      SELECT id, message, type, is_read as "isRead", created_at as "createdAt" 
+      FROM notifications 
+      ORDER BY created_at DESC
+    `);
+      return result.rows || [];
+    } catch (error) {
+      console.error("❌ Error fetching notifications:", error);
+      return [];
+    }
   }
-
   async markNotificationAsRead(notificationId: number): Promise<void> {
-    await this.db.update(notifications)
-      .set({ isRead: true })
-      .where(eq(notifications.id, notificationId));
-    console.log(`Marking notification ${notificationId} as read`);
+    try {
+      // Fix: Use proper SQL with column name is_read
+      await this.db.execute(sql`UPDATE notifications SET is_read = true WHERE id = ${notificationId}`);
+      console.log(`✅ Marked notification ${notificationId} as read`);
+    } catch (error) {
+      console.error(`❌ Error marking notification ${notificationId} as read:`, error);
+      throw error;
+    }
   }
 
   async markAllNotificationsAsRead(): Promise<void> {
-    await this.query('UPDATE notifications SET is_read = true');
-    console.log("Marking all notifications as read");
+    try {
+      // Fix: Use proper db.execute instead of this.query
+      await this.db.execute(sql`UPDATE notifications SET is_read = true WHERE is_read = false`);
+      console.log("✅ Marked all notifications as read");
+    } catch (error) {
+      console.error("❌ Error marking all notifications as read:", error);
+      throw error;
+    }
   }
 
   async clearAllNotifications(): Promise<void> {
-    await this.db.execute(sql`DELETE FROM notifications`);
-    console.log("All notifications cleared");
-  }
-  async createNotification(notification: { message: string, type: string }) {
-    const result = await this.db.execute(sql`
-  INSERT INTO notifications (message, type, is_read, created_at) 
-  VALUES (${notification.message}, ${notification.type}, false, NOW()) 
-  RETURNING *
-`);
-    return result.rows[0];
-  }
-  async deleteNotification(notificationId: number): Promise<void> {
-    const index = this.mockNotifications.findIndex(n => n.id === notificationId);
-    if (index > -1) {
-      this.mockNotifications.splice(index, 1);
+    try {
+      await this.db.execute(sql`DELETE FROM notifications`);
+      console.log("✅ All notifications cleared");
+    } catch (error) {
+      console.error("❌ Error clearing notifications:", error);
+      throw error;
     }
-    console.log(`Deleting notification ${notificationId}`);
+  }
+
+  async createNotification(notification: { message: string, type: string }) {
+    try {
+      const result = await this.db.execute(sql`
+      INSERT INTO notifications (message, type, is_read, created_at) 
+      VALUES (${notification.message}, ${notification.type}, false, NOW()) 
+      RETURNING *
+    `);
+      console.log("✅ Created notification:", notification.message);
+      return result.rows[0];
+    } catch (error) {
+      console.error("❌ Error creating notification:", error);
+      throw error;
+    }
+  }
+
+  async deleteNotification(notificationId: number): Promise<void> {
+    try {
+      console.log(`🔍 Deleting notification ID: ${notificationId}`);
+
+      // Fix: Remove mock array logic, use proper database deletion
+      await this.db.execute(sql`DELETE FROM notifications WHERE id = ${notificationId}`);
+
+      console.log(`✅ Successfully deleted notification ${notificationId}`);
+    } catch (error) {
+      console.error(`❌ Error deleting notification ${notificationId}:`, error);
+      throw error;
+    }
   }
 
   // Analytics and metrics
@@ -528,87 +659,87 @@ async updateApiKeyUsage(keyValue: string): Promise<void> {
       );
   }
 
-// ========================================
-// CHAT SESSION OPERATIONS
-// ========================================
+  // ========================================
+  // CHAT SESSION OPERATIONS
+  // ========================================
 
-async createChatSession(sessionData: {
-  apiKeyId: number;
-  sessionId: string;
-  userId?: string;
-  status?: string;
-  telegramChatId?: number;
-}) {
-  try {
-    console.log("💾 Attempting to save session to DB:", sessionData);
-    const result = await this.db.execute(sql`
+  async createChatSession(sessionData: {
+    apiKeyId: number;
+    sessionId: string;
+    userId?: string;
+    status?: string;
+    telegramChatId?: number;
+  }) {
+    try {
+      console.log("💾 Attempting to save session to DB:", sessionData);
+      const result = await this.db.execute(sql`
       INSERT INTO chat_sessions (api_key_id, session_id, user_id, status, telegram_chat_id, created_at, updated_at)
       VALUES (${sessionData.apiKeyId}, ${sessionData.sessionId}, ${sessionData.userId || null}, ${sessionData.status || 'active'}, ${sessionData.telegramChatId || null}, NOW(), NOW())
       RETURNING *
     `);
-    console.log("✅ Session saved successfully:", result.rows[0]);
-    return result.rows[0];
-  } catch (error) {
-    console.error("❌ Database error saving session:", error);
-    throw error;
+      console.log("✅ Session saved successfully:", result.rows[0]);
+      return result.rows[0];
+    } catch (error) {
+      console.error("❌ Database error saving session:", error);
+      throw error;
+    }
   }
-}
 
-async getChatSession(sessionId: string) {
-  try {
-    console.log("🔍 Querying DB for session:", sessionId);
-    const result = await this.db.execute(sql`
+  async getChatSession(sessionId: string) {
+    try {
+      console.log("🔍 Querying DB for session:", sessionId);
+      const result = await this.db.execute(sql`
       SELECT * FROM chat_sessions 
       WHERE session_id = ${sessionId}
       LIMIT 1
     `);
-    console.log("📋 DB query result:", result.rows[0] || "NOT FOUND");
-    return result.rows[0] || null;
-  } catch (error) {
-    console.error("❌ Database error getting session:", error);
-    return null;
+      console.log("📋 DB query result:", result.rows[0] || "NOT FOUND");
+      return result.rows[0] || null;
+    } catch (error) {
+      console.error("❌ Database error getting session:", error);
+      return null;
+    }
   }
-}
 
-async getChatSessionByUserId(userId: string) {
-  try {
-    console.log("🔍 Querying DB for session by userId:", userId);
-    const result = await this.db.execute(sql`
+  async getChatSessionByUserId(userId: string) {
+    try {
+      console.log("🔍 Querying DB for session by userId:", userId);
+      const result = await this.db.execute(sql`
       SELECT * FROM chat_sessions 
       WHERE user_id = ${userId} AND status = 'active'
       ORDER BY created_at DESC
       LIMIT 1
     `);
-    console.log("📋 DB query result by userId:", result.rows[0] || "NOT FOUND");
-    return result.rows[0] || null;
-  } catch (error) {
-    console.error("❌ Database error getting session by userId:", error);
-    return null;
+      console.log("📋 DB query result by userId:", result.rows[0] || "NOT FOUND");
+      return result.rows[0] || null;
+    } catch (error) {
+      console.error("❌ Database error getting session by userId:", error);
+      return null;
+    }
   }
-}
 
-async createChatMessage(messageData: {
-  sessionId: string;
-  senderType: string;
-  message: string;
-  senderId?: string;
-  telegramMessageId?: number;
-}) {
-  const result = await this.db.execute(sql`
+  async createChatMessage(messageData: {
+    sessionId: string;
+    senderType: string;
+    message: string;
+    senderId?: string;
+    telegramMessageId?: number;
+  }) {
+    const result = await this.db.execute(sql`
     INSERT INTO chat_messages (session_id, sender_type, sender_id, message, telegram_message_id, created_at)
     VALUES (${messageData.sessionId}, ${messageData.senderType}, ${messageData.senderId || null}, ${messageData.message}, ${messageData.telegramMessageId || null}, NOW())
     RETURNING *
   `);
-  return result.rows[0];
-}
+    return result.rows[0];
+  }
 
-async getChatMessages(sessionId: string) {
-  const result = await this.db.execute(sql`
+  async getChatMessages(sessionId: string) {
+    const result = await this.db.execute(sql`
     SELECT * FROM chat_messages 
     WHERE session_id = ${sessionId}
     ORDER BY created_at ASC
   `);
-  return result.rows || [];
-}
+    return result.rows || [];
+  }
 }
 export const storage = new DatabaseStorage();

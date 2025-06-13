@@ -164,7 +164,8 @@ ${CEMENT_COMPANIES.map((company, index) => `${index + 1}. ${company}`).join('\n'
       }
 
       return {
-        message: `🏗️ Select cement types you need (reply with numbers separated by commas, e.g., "1,3,5"):
+        message: `🏗️ Select cement types you need (reply with numbers separated by commas, e.g., "1,3,5")
+        Choose Grade 33 for repairs/small fixings AND Grade 43 for general house-building:
 
 ${CEMENT_TYPES.map((type, index) => `${index + 1}. ${type}`).join('\n')}`,
         nextStep: 'buyer_cement_types',
@@ -349,7 +350,7 @@ Please specify quantity (For both Cement and TMT if both are selected) (e.g., "5
       'Ganeshguri, Guwahati';
     
     return {
-      message: `📍 We currently serve ${defaultLocation}.
+      message: `📍 We currently serve ${defaultLocation} and nearby areas.
 
 Type "yes" to continue with this location or "no" if you're in a different area:`,
       nextStep: 'buyer_city_confirm',

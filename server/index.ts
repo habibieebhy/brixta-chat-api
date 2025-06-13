@@ -8,6 +8,7 @@ const app = express();
 app.use(cors({
   origin: [
     'http://localhost:3000',
+    'http://localhost:8000',
     'https://mycoco.site',
     'https://telegram-chat-api.onrender.com',
     'https://tele-bot-test.onrender.com', 

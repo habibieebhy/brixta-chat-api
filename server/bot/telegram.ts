@@ -192,64 +192,87 @@ export class TelegramBotService {
   }
 
   public async handleWebUserMessage(msg: any) {
-    const text = msg.message || msg.text;
-    const match = text.match(/\[API\] Session: ([^|]+) \| User: ([^\n]+)\n(.+)/);
+    let sessionId, userMessage, userId;
 
-    if (match) {
-      const [sessionId, userMessage, userId] = match;
-      console.log('🌐 Processing web user message:', { sessionId, userMessage, userId});
+    if (typeof msg === 'object' && msg.sessionId && msg.message) {
+      // Case 1: Handle the new JSON object format
+      sessionId = msg.sessionId;
+      userMessage = msg.message;
+      userId = msg.userId || 'web_user'; // Provide a default if not present
 
-      let session = this.webSessions.get(sessionId);
-      if (!session) {
-        session = { step: 'user_type', userType: 'web', sessionId, messages: [] };
-        this.webSessions.set(sessionId, session);
-      } 
+      console.log('🌐 Processing NEW web user message format:', { sessionId, userMessage, userId });
+    } else if (typeof msg.message === 'string') {
+      // Case 2: Handle the old regex string format
+      const match = msg.message.match(/\[API\] Session: ([^|]+) \| User: ([^\n]+)\n(.+)/);
 
-      session.messages.push({
-        senderType: 'user',
-        message: userMessage,
-        timestamp: new Date()
-      });
-
-      const context: ConversationContextB = {
-        chatId: sessionId,
-        userType: 'web',
-        sessionId,
-        step: session.step,
-        data: session.data,
-        
-      };
-
-      const response = await conversationFlowB.processMessage(context, userMessage);
-
-      session.step = response.nextStep;
-      session.data = { ...session.data, ...response.data };
-
-      session.messages.push({
-        senderType: 'bot',
-        message: response.message,
-        timestamp: new Date()
-      });
-
-      this.webSessions.set(sessionId, session);
-
-      if (response.action) {
-        await this.handleCompletionAction(response.action, response.data, sessionId, 'web');
-      }
-
-      if (global.io) {
-        global.io.to(`session-${sessionId}`).emit('bot-message', {
-          sessionId,
-          message: response.message,
-          timestamp: new Date(),
-          senderType: 'bot'
-        });
-
-        console.log('✅ Response sent to web user via Socket.io');
+      if (match) {
+        [, sessionId, userId, userMessage] = match;
+        console.log('🌐 Processing OLD web user message format:', { sessionId, userMessage, userId });
       } else {
-        console.error('❌ Socket.io not available');
+        console.error('❌ Received an invalid string message payload:', msg.message);
+        return;
       }
+    } else {
+      console.error('❌ Received an unknown message payload format:', msg);
+      return;
     }
+
+    if (!sessionId || !userMessage) {
+      console.error('❌ Missing critical fields in message payload.');
+      return;
+    }
+
+    let session = this.webSessions.get(sessionId);
+    if (!session) {
+      session = { step: 'user_type', userType: 'web', sessionId, messages: [] };
+      this.webSessions.set(sessionId, session);
+    }
+
+    session.messages.push({
+      senderType: 'user',
+      message: userMessage,
+      timestamp: new Date()
+    });
+
+    const context: ConversationContextB = {
+      chatId: sessionId,
+      userType: 'web',
+      sessionId,
+      step: session.step,
+      data: session.data,
+
+    };
+
+    const response = await conversationFlowB.processMessage(context, userMessage);
+
+    session.step = response.nextStep;
+    session.data = { ...session.data, ...response.data };
+
+    session.messages.push({
+      senderType: 'bot',
+      message: response.message,
+      timestamp: new Date()
+    });
+
+    this.webSessions.set(sessionId, session);
+
+    if (response.action) {
+      await this.handleCompletionAction(response.action, response.data, sessionId, 'web');
+    }
+
+    if (global.io) {
+      global.io.to(`session-${sessionId}`).emit('bot-message', {
+        sessionId,
+        message: response.message,
+        timestamp: new Date(),
+        senderType: 'bot'
+      });
+
+      console.log('✅ Response sent to web user via Socket.io');
+    } else {
+      console.error('❌ Socket.io not available');
+    }
+    // }
   }
 
   async handleIncomingMessage(msg: any) {

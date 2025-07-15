@@ -196,7 +196,7 @@ export class TelegramBotService {
     const match = text.match(/\[API\] Session: ([^|]+) \| User: ([^\n]+)\n(.+)/);
 
     if (match) {
-      const [, sessionId, userMessage, userId] = match;
+      const [sessionId, userMessage, userId] = match;
       console.log('🌐 Processing web user message:', { sessionId, userMessage, userId});
 
       let session = this.webSessions.get(sessionId);

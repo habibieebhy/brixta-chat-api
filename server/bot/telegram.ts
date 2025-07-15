@@ -200,14 +200,14 @@ export class TelegramBotService {
       userMessage = msg.message;
       userId = msg.userId || 'web_user'; // Provide a default if not present
 
-      console.log('🌐 Processing NEW web user message format:', { sessionId, userMessage, userId });
+      console.log('🌐 Processing JSON web user message format:', { sessionId, userMessage, userId });
     } else if (typeof msg.message === 'string') {
       // Case 2: Handle the old regex string format
       const match = msg.message.match(/\[API\] Session: ([^|]+) \| User: ([^\n]+)\n(.+)/);
 
       if (match) {
         [, sessionId, userId, userMessage] = match;
-        console.log('🌐 Processing OLD web user message format:', { sessionId, userMessage, userId });
+        console.log('🌐 Processing REGEX web user message format:', { sessionId, userMessage, userId });
       } else {
         console.error('❌ Received an invalid string message payload:', msg.message);
         return;
@@ -222,12 +222,15 @@ export class TelegramBotService {
       return;
     }
 
+    console.log('--- Debugging Conversation Flow ---');
+    console.log('1. Received User Message:', userMessage);
+
     let session = this.webSessions.get(sessionId);
     if (!session) {
       session = { step: 'user_type', userType: 'web', sessionId, messages: [] };
       this.webSessions.set(sessionId, session);
     }
-
+    console.log('2. Current Session Step (before processing):', session.step);
     session.messages.push({
       senderType: 'user',
       message: userMessage,
@@ -246,6 +249,8 @@ export class TelegramBotService {
     const response = await conversationFlowB.processMessage(context, userMessage);
 
     session.step = response.nextStep;
+    console.log('3. Bot Response Message:', response.message);
+    console.log('4. Next Session Step (after processing):', session.step);
     session.data = { ...session.data, ...response.data };
 
     session.messages.push({

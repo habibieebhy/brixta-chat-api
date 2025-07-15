@@ -8,6 +8,7 @@ import {
   botConfig,
   vendorRates,
   apiKeys,
+  salesRecords,
   type Vendor,
   type InsertVendor,
   type Inquiry,
@@ -741,5 +742,56 @@ export class DatabaseStorage {
   `);
     return result.rows || [];
   }
+
+  async createSalesRecord(data: {
+    salesType: string;
+    cementCompany?: string;
+    cementQty?: number;
+    cementPrice?: number;
+    tmtCompany?: string;
+    tmtSizes?: string[];
+    tmtPrices?: any;
+    tmtQuantities?: any;
+    projectOwner: string;
+    projectName: string;
+    projectLocation?: string;
+    completionTime: number;
+    contactNumber: string;
+    salesRepName?: string;
+    platform?: string;
+    sessionId?: string;
+    userEmail?: string;
+  }) {
+    try {
+      console.log('💾 Creating sales record:', data);
+
+      const result = await this.db.insert(salesRecords).values({
+        salesType: data.salesType,
+        cementCompany: data.cementCompany,
+        cementQty: data.cementQty,
+        cementPrice: data.cementPrice?.toString(),
+        tmtCompany: data.tmtCompany,
+        tmtSizes: data.tmtSizes,
+        tmtPrices: data.tmtPrices,
+        tmtQuantities: data.tmtQuantities,
+        projectOwner: data.projectOwner,
+        projectName: data.projectName,
+        projectLocation: data.projectLocation,
+        completionTime: data.completionTime,
+        contactNumber: data.contactNumber,
+        salesRepName: data.salesRepName,
+        platform: data.platform || 'web',
+        sessionId: data.sessionId,
+        userEmail: data.userEmail
+      }).returning();
+
+      console.log('✅ Sales record created:', result[0]);
+      return result[0];
+    } catch (error) {
+      console.error('❌ Error creating sales record:', error);
+      throw error;
+    }
+  }
+
 }
 export const storage = new DatabaseStorage();

@@ -4,6 +4,7 @@ import { conversationFlowB, type ConversationContextB } from "../conversationFlo
 import { conversationFlowV, type ConversationContextV } from "../conversationFlowV";
 import { vendorResponseFlow } from "../vResponseFlow";
 import { Server as SocketIOServer } from 'socket.io';
+//import { googleSheetsService } from '../googleSheetsService';
 
 declare global {
   var io: SocketIOServer | undefined;
@@ -154,7 +155,7 @@ export class TelegramBotService {
 
   private async handleLocationCallback(query: any, data: string) {
     const chatId = query.message.chat.id;
-    
+
     console.log(`🔘 Location callback: ${data}`);
 
     let session = this.userSessions.get(chatId.toString());
@@ -191,18 +192,18 @@ export class TelegramBotService {
   }
 
   public async handleWebUserMessage(msg: any) {
-    const text = msg.text;
+    const text = msg.message || msg.text;
     const match = text.match(/\[API\] Session: ([^|]+) \| User: ([^\n]+)\n(.+)/);
 
     if (match) {
-      const [, sessionId, userId, userMessage] = match;
-      console.log('🌐 Processing web user message:', { sessionId, userId, userMessage });
+      const [, sessionId, userMessage, userId] = match;
+      console.log('🌐 Processing web user message:', { sessionId, userMessage, userId});
 
       let session = this.webSessions.get(sessionId);
       if (!session) {
         session = { step: 'user_type', userType: 'web', sessionId, messages: [] };
         this.webSessions.set(sessionId, session);
-      }
+      } 
 
       session.messages.push({
         senderType: 'user',
@@ -215,7 +216,8 @@ export class TelegramBotService {
         userType: 'web',
         sessionId,
         step: session.step,
-        data: session.data
+        data: session.data,
+        
       };
 
       const response = await conversationFlowB.processMessage(context, userMessage);
@@ -617,16 +619,16 @@ For your inquiry in ${inquiry.city}
 
         } else {
           console.log(`📢 Finding vendors for material "${data.material}" in location "${data.city}"`);
-          
+
           const vendors = await storage.getVendorsByMaterialAndCity(data.material, data.city);
           console.log(`📋 Found ${vendors.length} vendors for ${data.material}`);
-          
+
           if (vendors.length === 0) {
             console.log(`⚠️ No vendors found for material "${data.material}" in city "${data.city}"`);
             const cityOnly = data.city.split(', ').pop() || data.city;
             const fallbackVendors = await storage.getVendorsByMaterialAndCity(data.material, cityOnly);
             console.log(`🔍 Fallback search found ${fallbackVendors.length} vendors in ${cityOnly}`);
-            
+
             if (fallbackVendors.length > 0) {
               await this.notifyVendorsOfNewInquiry(inquiryId, inquiryData, fallbackVendors);
             }
@@ -652,6 +654,30 @@ For your inquiry in ${inquiry.city}
         console.log(`💾 Creating vendor in storage:`, vendorData);
         await storage.createVendor(vendorData);
         console.log(`✅ Vendor ${vendorId} registered successfully`);
+
+      } else if (action === 'create_sales_record') {
+        console.log(`📊 Creating sales record:`, data);
+
+        const salesData = {
+          salesType: data.salesType,
+          cementCompany: data.cementCompany,
+          cementQty: data.cementQty,
+          cementPrice: data.cementPrice,
+          tmtCompany: data.tmtCompany,
+          tmtSizes: data.tmtSizes,
+          tmtPrices: data.tmtPrices,
+          tmtQuantities: data.tmtQuantities,
+          projectOwner: data.projectOwner,
+          projectName: data.projectName,
+          projectLocation: data.projectLocation,
+          completionTime: data.completionTime,
+          contactNumber: data.contactNumber,
+          platform: platform,
+          sessionId: platform === 'web' ? chatIdOrSessionId.toString() : undefined,
+          // userEmail: userEmail || data.userEmail || session.userEmail
+        };
+        await storage.createSalesRecord(salesData);
+        console.log(`✅ Sales record created successfully`);
       }
     } catch (error) {
       console.error(`❌ Error handling ${action}:`, error);

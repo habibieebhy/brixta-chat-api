@@ -1,6 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { desc, eq } from 'drizzle-orm';
 import {
   vendors,
   inquiries,
@@ -8,7 +8,7 @@ import {
   botConfig,
   vendorRates,
   apiKeys,
-  salesRecords,
+  sales,
   type Vendor,
   type InsertVendor,
   type Inquiry,
@@ -20,9 +20,10 @@ import {
   type VendorRate,
   type InsertVendorRate,
   type ApiKey,
-  type InsertApiKey
+  type InsertApiKey,
+  type InsertSale,
 } from "../shared/schema";
-
+import { eq, and, inArray, sql } from "drizzle-orm";
 
 export class DatabaseStorage {
   private db: any;
@@ -65,6 +66,12 @@ export class DatabaseStorage {
     this.db = drizzle(connection);
   }
 
+  // create sale
+  async createSale(saleData: InsertSale): Promise<Sale> {
+    const [sale] = await this.db.insert(sales).values(saleData).returning();
+    return sale;
+  }
+
   // Vendor operations
   async createVendor(vendorData: InsertVendor): Promise<Vendor> {
     const [vendor] = await this.db.insert(vendors).values(vendorData).returning();
@@ -97,53 +104,6 @@ export class DatabaseStorage {
     return vendor || null;
   }
 
-  async getVendorsByMaterialAndCity(material: string, city: string) {
-    try {
-      console.log(`🔍 Searching vendors for: ${material} in location: ${city}`);
-
-      // Get all vendors first
-      const allVendors = await this.db.select().from(vendors);
-      console.log(`📋 Total vendors in database: ${allVendors.length}`);
-
-      // Add null check and ensure we have an array
-      if (!allVendors || !Array.isArray(allVendors)) {
-        console.log(`❌ No vendors array returned from database`);
-        return [];
-      }
-
-      // Filter vendors by material and city
-      const filteredVendors = allVendors.filter(vendor => {
-        // Check if vendor has materials array
-        if (!vendor.materials || !Array.isArray(vendor.materials)) {
-          console.log(`⚠️ Vendor ${vendor.name} has invalid materials:`, vendor.materials);
-          return false;
-        }
-
-        // Check material match
-        const materialMatch = vendor.materials.includes(material);
-
-        // Check city match (exact or partial)
-        const cityMatch = vendor.city && (
-          vendor.city.includes(city) ||
-          city.includes(vendor.city) ||
-          vendor.city.toLowerCase().includes(city.toLowerCase()) ||
-          city.toLowerCase().includes(vendor.city.toLowerCase())
-        );
-
-        console.log(`🔍 Vendor ${vendor.name}: material=${materialMatch}, city=${cityMatch}, materials=${vendor.materials}, vendorCity=${vendor.city}`);
-
-        return materialMatch && cityMatch;
-      });
-
-      console.log(`✅ Found ${filteredVendors.length} matching vendors`);
-      return filteredVendors;
-
-    } catch (error) {
-      console.error('Error fetching vendors:', error);
-      return []; // Return empty array instead of undefined
-    }
-  }
-
   async updateVendor(vendorId: number, updates: Partial<Vendor>): Promise<Vendor> {
     const [vendor] = await this.db
       .update(vendors)
@@ -162,79 +122,87 @@ export class DatabaseStorage {
     return await this.db.select().from(vendors).orderBy(vendors.createdAt);
   }
   async getVendorsWithLatestQuotes() {
-    console.log("Starting getVendorsWithLatestQuotes");
+  console.log("Starting getVendorsWithLatestQuotes");
 
-    // Get all vendors using Drizzle
-    const allVendors = await this.getAllVendors();
-    console.log(`Found ${allVendors.length} vendors`);
+  // Get all vendors using Drizzle
+  const allVendors = await this.getAllVendors();
+  console.log(`Found ${allVendors.length} vendors`);
 
-    // For each vendor, get their latest price response
-    for (let vendor of allVendors) {
-      console.log(`Processing vendor: ${vendor.vendorId}`);
-      try {
-        const latestQuotes = await this.db
-          .select()
-          .from(priceResponses)
-          .where(eq(priceResponses.vendorId, vendor.vendorId))
-          .orderBy(sql`${priceResponses.timestamp} DESC`)
-          .limit(1);
+  // For each vendor, get their latest price response AND latest sale
+  for (let vendor of allVendors) {
+    console.log(`Processing vendor: ${vendor.vendorId}`);
+    try {
+      // Get latest quote (existing code)
+      const latestQuotes = await this.db
+        .select()
+        .from(priceResponses)
+        .where(eq(priceResponses.vendorId, vendor.vendorId))
+        .orderBy(sql`${priceResponses.timestamp} DESC`)
+        .limit(1);
 
-        // Add the latest quote data to vendor object
-        if (latestQuotes.length > 0) {
-          vendor.latest_quote = latestQuotes[0];
-          console.log(`Found quote for ${vendor.vendorId}`);
-        } else {
-          vendor.latest_quote = null;
-          console.log(`No quotes for ${vendor.vendorId}`);
-        }
-      } catch (error) {
-        console.error(`Error fetching quote for vendor ${vendor.vendorId}:`, error);
+      // NEW: Get latest sale
+      const latestSale = await this.db.execute(sql`
+        SELECT * FROM sales_records 
+        WHERE sales_rep_name = ${vendor.name}
+        ORDER BY recorded_at DESC
+        LIMIT 1
+      `);
+
+      // Compare timestamps and use the most recent one
+      const quote = latestQuotes[0];
+      const sale = latestSale.rows[0];
+
+      if (!quote && !sale) {
         vendor.latest_quote = null;
+        console.log(`No quotes or sales for ${vendor.vendorId}`);
+      } else if (!quote && sale) {
+        // Only sale exists
+        vendor.latest_quote = {
+          price: sale.cement_price,
+          material: sale.sales_type,
+          timestamp: sale.recorded_at,
+          isSale: true,
+          company: sale.cement_company || sale.tmt_company,
+          quantity: sale.cement_qty
+        };
+        console.log(`Found only sale for ${vendor.vendorId}`);
+      } else if (quote && !sale) {
+        // Only quote exists
+        vendor.latest_quote = quote;
+        console.log(`Found only quote for ${vendor.vendorId}`);
+      } else {
+        // Both exist - use the more recent one
+        const quoteTime = new Date(quote.timestamp).getTime();
+        const saleTime = new Date(sale.recorded_at).getTime();
+        
+        if (saleTime > quoteTime) {
+          vendor.latest_quote = {
+            price: sale.cement_price,
+            material: sale.sales_type,
+            timestamp: sale.recorded_at,
+            isSale: true,
+            company: sale.cement_company || sale.tmt_company,
+            quantity: sale.cement_qty
+          };
+          console.log(`Sale is more recent for ${vendor.vendorId}`);
+        } else {
+          vendor.latest_quote = quote;
+          console.log(`Quote is more recent for ${vendor.vendorId}`);
+        }
       }
-    }
 
-    return allVendors;
+    } catch (error) {
+      console.error(`Error fetching quote/sale for vendor ${vendor.vendorId}:`, error);
+      vendor.latest_quote = null;
+    }
   }
+
+  return allVendors;
+}
   // Inquiry operations
   async createInquiry(inquiryData: InsertInquiry): Promise<Inquiry> {
-    // Convert arrays to JSON strings for storage
-    const processedData = {
-      ...inquiryData,
-      cementTypes: inquiryData.cementTypes ?
-        (Array.isArray(inquiryData.cementTypes) ? JSON.stringify(inquiryData.cementTypes) : inquiryData.cementTypes)
-        : null,
-      tmtSizes: inquiryData.tmtSizes ?
-        (Array.isArray(inquiryData.tmtSizes) ? JSON.stringify(inquiryData.tmtSizes) : inquiryData.tmtSizes)
-        : null
-    };
-
-    console.log('🔍 Creating inquiry with processed data:', processedData);
-
-    const [inquiry] = await this.db.insert(inquiries).values(processedData).returning();
+    const [inquiry] = await this.db.insert(inquiries).values(inquiryData).returning();
     return inquiry;
-  }
-
-  async getInquiryById(inquiryId: string): Promise<Inquiry | null> {
-    const [inquiry] = await this.db
-      .select()
-      .from(inquiries)
-      .where(eq(inquiries.inquiryId, inquiryId))
-      .limit(1);
-
-    if (inquiry) {
-      // Parse JSON strings back to arrays
-      inquiry.cementTypes = this.parseJsonField(inquiry.cementTypes, 'cementTypes');
-      inquiry.tmtSizes = this.parseJsonField(inquiry.tmtSizes, 'tmtSizes');
-
-      console.log('🔍 Retrieved inquiry with parsed data:', {
-        inquiryId: inquiry.inquiryId,
-        material: inquiry.material,
-        cementTypes: inquiry.cementTypes,
-        tmtSizes: inquiry.tmtSizes
-      });
-    }
-
-    return inquiry || null;
   }
 
   async getInquiries(limit?: number): Promise<Inquiry[]> {
@@ -244,27 +212,17 @@ export class DatabaseStorage {
       query = query.limit(limit);
     }
 
-    const inquiriesList = await query;
-
-    // Parse JSON fields for all inquiries
-    return inquiriesList.map(inquiry => {
-      inquiry.cementTypes = this.parseJsonField(inquiry.cementTypes, 'cementTypes');
-      inquiry.tmtSizes = this.parseJsonField(inquiry.tmtSizes, 'tmtSizes');
-      return inquiry;
-    });
+    return await query;
   }
 
-  // Add this helper method to the DatabaseStorage class
-  private parseJsonField(field: any, fieldName: string): any {
-    if (!field) return null;
-    if (typeof field !== 'string') return field; // Already parsed or not a string
+  async getInquiryById(inquiryId: string): Promise<Inquiry | null> {
+    const [inquiry] = await this.db
+      .select()
+      .from(inquiries)
+      .where(eq(inquiries.inquiryId, inquiryId))
+      .limit(1);
 
-    try {
-      return JSON.parse(field);
-    } catch (e) {
-      console.error(`Error parsing ${fieldName}:`, e);
-      return null;
-    }
+    return inquiry || null;
   }
 
   async incrementInquiryResponses(inquiryId: string): Promise<void> {
@@ -286,7 +244,7 @@ export class DatabaseStorage {
           status,
           updatedAt: new Date()
         })
-        .where(eq(inquiries.inquiryId, inquiryId))
+        .where(eq(inquiries.id, inquiryId))
         .returning();
 
       return inquiry || null;
@@ -300,7 +258,7 @@ export class DatabaseStorage {
     try {
       const [inquiry] = await this.db
         .delete(inquiries)
-        .where(eq(inquiries.inquiryId, inquiryId))
+        .where(eq(inquiries.id, inquiryId))
         .returning();
 
       return inquiry || null;
@@ -318,7 +276,7 @@ export class DatabaseStorage {
           status,
           updatedAt: new Date()
         })
-        .where(inArray(inquiries.inquiryId, inquiryIds))
+        .where(inArray(inquiries.id, inquiryIds))
         .returning();
 
       return { count: result.length, inquiries: result };
@@ -332,7 +290,7 @@ export class DatabaseStorage {
     try {
       const result = await this.db
         .delete(inquiries)
-        .where(inArray(inquiries.inquiryId, inquiryIds))
+        .where(inArray(inquiries.id, inquiryIds))
         .returning();
 
       return { count: result.length };
@@ -344,7 +302,6 @@ export class DatabaseStorage {
 
   // Price response operations
   async createPriceResponse(responseData: InsertPriceResponse): Promise<PriceResponse> {
-    console.log('🔍 Creating price response:', responseData);
     const [response] = await this.db.insert(priceResponses).values(responseData).returning();
     return response;
   }
@@ -517,77 +474,40 @@ export class DatabaseStorage {
 
   // FIXED: Notification operations that actually work
   async getNotifications(): Promise<any[]> {
-    try {
-      const result = await this.db.execute(sql`
-      SELECT id, message, type, is_read as "isRead", created_at as "createdAt" 
-      FROM notifications 
-      ORDER BY created_at DESC
-    `);
-      return result.rows || [];
-    } catch (error) {
-      console.error("❌ Error fetching notifications:", error);
-      return [];
-    }
+    const result = await this.db.execute(sql`SELECT * FROM notifications ORDER BY created_at DESC`);
+    return result.rows || [];
   }
+
   async markNotificationAsRead(notificationId: number): Promise<void> {
-    try {
-      // Fix: Use proper SQL with column name is_read
-      await this.db.execute(sql`UPDATE notifications SET is_read = true WHERE id = ${notificationId}`);
-      console.log(`✅ Marked notification ${notificationId} as read`);
-    } catch (error) {
-      console.error(`❌ Error marking notification ${notificationId} as read:`, error);
-      throw error;
-    }
+    await this.db.update(notifications)
+      .set({ isRead: true })
+      .where(eq(notifications.id, notificationId));
+    console.log(`Marking notification ${notificationId} as read`);
   }
 
   async markAllNotificationsAsRead(): Promise<void> {
-    try {
-      // Fix: Use proper db.execute instead of this.query
-      await this.db.execute(sql`UPDATE notifications SET is_read = true WHERE is_read = false`);
-      console.log("✅ Marked all notifications as read");
-    } catch (error) {
-      console.error("❌ Error marking all notifications as read:", error);
-      throw error;
-    }
+    await this.query('UPDATE notifications SET is_read = true');
+    console.log("Marking all notifications as read");
   }
 
   async clearAllNotifications(): Promise<void> {
-    try {
-      await this.db.execute(sql`DELETE FROM notifications`);
-      console.log("✅ All notifications cleared");
-    } catch (error) {
-      console.error("❌ Error clearing notifications:", error);
-      throw error;
-    }
+    await this.db.execute(sql`DELETE FROM notifications`);
+    console.log("All notifications cleared");
   }
-
   async createNotification(notification: { message: string, type: string }) {
-    try {
-      const result = await this.db.execute(sql`
-      INSERT INTO notifications (message, type, is_read, created_at) 
-      VALUES (${notification.message}, ${notification.type}, false, NOW()) 
-      RETURNING *
-    `);
-      console.log("✅ Created notification:", notification.message);
-      return result.rows[0];
-    } catch (error) {
-      console.error("❌ Error creating notification:", error);
-      throw error;
-    }
+    const result = await this.db.execute(sql`
+  INSERT INTO notifications (message, type, is_read, created_at) 
+  VALUES (${notification.message}, ${notification.type}, false, NOW()) 
+  RETURNING *
+`);
+    return result.rows[0];
   }
-
   async deleteNotification(notificationId: number): Promise<void> {
-    try {
-      console.log(`🔍 Deleting notification ID: ${notificationId}`);
-
-      // Fix: Remove mock array logic, use proper database deletion
-      await this.db.execute(sql`DELETE FROM notifications WHERE id = ${notificationId}`);
-
-      console.log(`✅ Successfully deleted notification ${notificationId}`);
-    } catch (error) {
-      console.error(`❌ Error deleting notification ${notificationId}:`, error);
-      throw error;
+    const index = this.mockNotifications.findIndex(n => n.id === notificationId);
+    if (index > -1) {
+      this.mockNotifications.splice(index, 1);
     }
+    console.log(`Deleting notification ${notificationId}`);
   }
 
   // Analytics and metrics
@@ -738,7 +658,8 @@ export class DatabaseStorage {
     const result = await this.db.execute(sql`
     SELECT * FROM chat_messages 
     WHERE session_id = ${sessionId}
-    ORDER BY created_at ASC`);
+    ORDER BY created_at ASC
+  `);
     return result.rows || [];
   }
 
@@ -764,7 +685,7 @@ export class DatabaseStorage {
     try {
       console.log('💾 Creating sales record:', data);
 
-      const result = await this.db.insert(salesRecords).values({
+      const result = await this.db.insert(sales).values({
         salesType: data.salesType,
         cementCompany: data.cementCompany,
         cementQty: data.cementQty,
@@ -791,6 +712,5 @@ export class DatabaseStorage {
       throw error;
     }
   }
-
 }
 export const storage = new DatabaseStorage();

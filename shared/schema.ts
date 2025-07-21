@@ -1,4 +1,4 @@
-import { pgTable, text, serial, varchar, integer, boolean, timestamp, decimal, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, varchar, integer, boolean, timestamp, decimal } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -35,11 +35,6 @@ export const inquiries = pgTable("inquiries", {
   status: text("status").notNull().default("pending"), // "pending" | "responded" | "completed"
   platform: text("platform").default("whatsapp"), // ADDED THIS FIELD
   timestamp: timestamp("timestamp").defaultNow(),
-  cementCompany: text("cement_company"),
-  cementTypes: text("cement_types"), // JSON string of array
-  tmtCompany: text("tmt_company"),
-  tmtSizes: text("tmt_sizes"), // JSON string of array
-  buyerTeleId: text("buyer_tele_id"),
 });
 
 export const priceResponses = pgTable("price_responses", {
@@ -92,26 +87,26 @@ export const apiKeys = pgTable('api_keys', {
   usageCount: integer('usage_count').default(0)
 });
 
-export const salesRecords = pgTable('sales_records', {
+export const sales = pgTable('sales_records', {
   id: serial('id').primaryKey(),
-  salesType: varchar('sales_type', { length: 10 }).notNull(),
-  cementCompany: varchar('cement_company', { length: 100 }),
-  cementQty: integer('cement_qty'),
-  cementPrice: decimal('cement_price', { precision: 10, scale: 2 }),
-  tmtCompany: varchar('tmt_company', { length: 100 }),
-  tmtSizes: text('tmt_sizes').array(),
-  tmtPrices: jsonb('tmt_prices'),
-  tmtQuantities: jsonb('tmt_quantities'),
-  projectOwner: varchar('project_owner', { length: 200 }).notNull(),
-  projectName: varchar('project_name', { length: 300 }).notNull(),
-  projectLocation: varchar('project_location', { length: 200 }),
-  completionTime: integer('completion_time').notNull(),
-  contactNumber: varchar('contact_number', { length: 15 }).notNull(),
-  salesRepName: varchar('sales_rep_name', { length: 100 }),
-  recordedAt: timestamp('recorded_at').defaultNow(),
-  platform: varchar('platform', { length: 20 }).default('web'),
-  sessionId: varchar('session_id', { length: 100 }),
-  userEmail: text('user_email')
+  sales_type: varchar('sales_type', { length: 20 }),
+  cement_company: varchar('cement_company', { length: 255 }),
+  cement_qty: varchar('cement_qty', { length: 100 }),
+  cement_price: decimal('cement_price', { precision: 10, scale: 2 }),
+  tmt_company: varchar('tmt_company', { length: 255 }),
+  tmt_sizes: varchar('tmt_sizes', { length: 255 }),
+  tmt_prices: varchar('tmt_prices', { length: 255 }),
+  tmt_quantities: varchar('tmt_quantities', { length: 255 }),
+  project_owner: varchar('project_owner', { length: 255 }),
+  project_name: varchar('project_name', { length: 255 }),
+  project_location: varchar('project_location', { length: 255 }),
+  completion_time: integer('completion_time'),
+  contact_number: varchar('contact_number', { length: 50 }),
+  sales_rep_name: varchar('sales_rep_name', { length: 255 }),
+  platform: varchar('platform', { length: 50 }),
+  recorded_at: timestamp('recorded_at').defaultNow(),
+  session_id: varchar('session_id', { length: 255 }),
+  user_email: varchar('user_email', { length: 255 })
 });
 
 // Insert schemas
@@ -143,6 +138,11 @@ export const insertVendorRateSchema = createInsertSchema(vendorRates).omit({
 export const insertApiKeySchema = createInsertSchema(apiKeys).omit({
   id: true,
   createdAt: true,
+});
+
+export const insertSaleSchema = createInsertSchema(sales).omit({
+  id: true,
+  recorded_at: true,
 });
 
 // Relations
@@ -186,3 +186,5 @@ export type VendorRate = typeof vendorRates.$inferSelect;
 export type InsertVendorRate = z.infer<typeof insertVendorRateSchema>;
 export type ApiKey = typeof apiKeys.$inferSelect;
 export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
+export type Sale = typeof sales.$inferSelect;
+export type InsertSale = z.infer<typeof insertSaleSchema>;
